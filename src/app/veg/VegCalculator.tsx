@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useHousehold } from "@/components/HouseholdProvider";
+import { supabase } from "@/lib/supabase";
 import { PRODUCE, findProduce, type Produce } from "@/lib/produce";
 import {
   billTotal,
@@ -62,6 +64,10 @@ const num = (s: string) => (s.trim() === "" ? NaN : Number(s));
 const show = (n: number) => (Number.isFinite(n) ? String(n) : "");
 
 export default function VegCalculator() {
+  const { householdId } = useHousehold();
+  const rateTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [lines, setLines] = useState<VegLine[]>([]);
   const [rates, setRates] = useState<Record<string, SavedRate>>({});
   const [vendorSaid, setVendorSaid] = useState("");
@@ -77,6 +83,82 @@ export default function VegCalculator() {
     setRates(load(RATES_KEY, {}));
     setLoaded(true);
   }, []);
+
+  // Shared rates from the household override this device's copy.
+  useEffect(() => {
+    supabase
+      .from("veg_rates")
+      .select("name, rate, rate_qty, rate_unit")
+      .eq("household_id", householdId)
+      .then(({ data }) => {
+        if (!data?.length) return;
+        setRates((local) => {
+          const merged = { ...local };
+          for (const r of data) {
+            merged[r.name] = { rate: Number(r.rate), rateQty: Number(r.rate_qty), rateUnit: r.rate_unit as Unit };
+          }
+          save(RATES_KEY, merged);
+          return merged;
+        });
+      });
+  }, [householdId]);
+
+  function rememberRate(name: string, r: SavedRate) {
+    clearTimeout(rateTimers.current[name]);
+    rateTimers.current[name] = setTimeout(() => {
+      supabase
+        .from("veg_rates")
+        .upsert({
+          household_id: householdId,
+          name,
+          rate: r.rate,
+          rate_qty: r.rateQty,
+          rate_unit: r.rateUnit,
+          updated_at: new Date().toISOString(),
+        })
+        .then(({ error }) => error && console.warn("rate not synced", error.message));
+    }, 1000);
+  }
+
+  async function saveBill() {
+    const valid = lines.filter((l) => linePrice(l).ok && Number.isFinite(l.rate) && Number.isFinite(l.qty));
+    if (!valid.length) return;
+    setSaving(true);
+    const { data: bill, error } = await supabase
+      .from("veg_bills")
+      .insert({
+        household_id: householdId,
+        total: billTotal(valid),
+        vendor_asked: Number.isFinite(vendor) ? vendor : null,
+      })
+      .select("id")
+      .single();
+    if (!error && bill) {
+      const { error: itemsError } = await supabase.from("veg_items").insert(
+        valid.map((l) => ({
+          bill_id: bill.id,
+          household_id: householdId,
+          name: l.name,
+          rate: l.rate,
+          rate_qty: l.rateQty,
+          rate_unit: l.rateUnit,
+          qty: l.qty,
+          qty_unit: l.qtyUnit,
+          price: (linePrice(l) as { price: number }).price,
+        })),
+      );
+      if (itemsError) console.warn(itemsError.message);
+    }
+    setSaving(false);
+    if (error) {
+      setSavedMsg("Couldn't save — check your connection");
+      return;
+    }
+    setLines([]);
+    setVendorSaid("");
+    setSavedMsg(`Saved bill of ${formatRupees(billTotal(valid))}`);
+    setTimeout(() => setSavedMsg(null), 3000);
+  }
 
   useEffect(() => {
     if (loaded) save(BILL_KEY, lines);
@@ -114,9 +196,11 @@ export default function VegCalculator() {
         const next = { ...l, ...patch };
         if ("rate" in patch || "rateQty" in patch || "rateUnit" in patch) {
           if (Number.isFinite(next.rate)) {
-            const r = { ...rates, [next.name]: { rate: next.rate, rateQty: next.rateQty, rateUnit: next.rateUnit } };
+            const saved = { rate: next.rate, rateQty: next.rateQty, rateUnit: next.rateUnit };
+            const r = { ...rates, [next.name]: saved };
             setRates(r);
             save(RATES_KEY, r);
+            rememberRate(next.name, saved);
           }
         }
         return next;
@@ -263,10 +347,20 @@ export default function VegCalculator() {
       )}
 
       {lines.length > 0 && (
-        <button onClick={clearBill} className="self-center text-sm text-ink-soft underline">
-          Clear bill
-        </button>
+        <div className="flex items-center justify-center gap-6">
+          <button onClick={clearBill} className="text-sm text-ink-soft underline">
+            Clear bill
+          </button>
+          <button
+            onClick={saveBill}
+            disabled={saving || total === 0}
+            className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save bill"}
+          </button>
+        </div>
       )}
+      {savedMsg && <p className="text-center text-sm font-medium text-good">{savedMsg}</p>}
 
       {/* Sticky total */}
       <div className="fixed inset-x-0 bottom-0 border-t border-line bg-surface/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">

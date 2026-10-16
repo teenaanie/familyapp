@@ -1,4 +1,5 @@
 import Link from "next/link";
+import FamilyPanel from "@/components/FamilyPanel";
 
 const TILES = [
   { href: "/veg", title: "Vegetable bill", note: "Check the vendor's maths", ready: true, emoji: "🥕" },
@@ -40,6 +41,7 @@ export default function Home() {
           ),
         )}
       </div>
+      <FamilyPanel />
     </main>
   );
 }
