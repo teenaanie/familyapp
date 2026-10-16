@@ -7,8 +7,8 @@ export const instant = false;
 const TILES = [
   { href: "/veg", title: "Vegetable bill", note: "Check the vendor's maths", ready: true, emoji: "🥕" },
   { href: "#", title: "Reminders", note: "Birthdays, bills, anniversaries", ready: false, emoji: "🔔" },
-  { href: "#", title: "Staff attendance", note: "Mark absences, salary", ready: false, emoji: "🧹" },
-  { href: "#", title: "Monthly payments", note: "Paid & pending this month", ready: false, emoji: "💸" },
+  { href: "/staff", title: "Staff attendance", note: "Mark absences, salary", ready: true, emoji: "🧹" },
+  { href: "/payments", title: "Monthly payments", note: "Paid & pending this month", ready: true, emoji: "💸" },
 ];
 
 export default function Home() {

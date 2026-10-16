@@ -45,3 +45,9 @@ body {
   color: var(--ink);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
+
+@layer components {
+  .input {
+    @apply rounded-xl border border-line bg-background px-3 py-2.5 text-base text-ink;
+  }
+}
