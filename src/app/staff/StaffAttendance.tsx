@@ -114,7 +114,7 @@ export default function StaffAttendance() {
                   <button
                     key={day}
                     onClick={() => tapDay(r, day)}
-                    className={`aspect-square rounded-lg text-sm tabular-nums ${cls} ${isToday ? "ring-2 ring-ink" : ""}`}
+                    className={`aspect-square rounded-lg text-sm tabular-nums ${cls} ${isToday ? "ring-2 ring-highlight" : ""}`}
                   >
                     {day}
                   </button>
@@ -134,7 +134,7 @@ export default function StaffAttendance() {
                   {r.pay.extraPay ? ` +${formatRupees(r.pay.extraPay)}` : ""}
                 </dd>
               </div>
-              <div className="rounded-xl bg-accent/15 py-2">
+              <div className="rounded-xl bg-highlight-soft py-2">
                 <dt className="text-xs text-ink-soft">Payable</dt>
                 <dd className="font-bold">{formatRupees(r.pay.payable)}</dd>
               </div>

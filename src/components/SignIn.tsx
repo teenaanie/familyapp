@@ -32,7 +32,7 @@ export default function SignIn() {
 
   return (
     <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-6 py-12">
-      <h1 className="text-3xl font-bold">Family Helper</h1>
+      <h1 className="text-4xl font-bold text-accent">Family Helper</h1>
       <p className="mt-1 text-ink-soft">Sign in to your home</p>
 
       {!sent ? (

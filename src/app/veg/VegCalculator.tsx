@@ -369,7 +369,7 @@ export default function VegCalculator() {
             <span className="text-ink-soft">
               Total · {lines.length} item{lines.length === 1 ? "" : "s"}
             </span>
-            <span className="text-3xl font-bold tabular-nums">{formatRupees(total)}</span>
+            <span className="font-display text-3xl font-bold tabular-nums text-accent">{formatRupees(total)}</span>
           </div>
           <div className="flex items-center gap-2">
             <label htmlFor="vendor" className="text-sm text-ink-soft">

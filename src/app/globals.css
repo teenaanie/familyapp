@@ -1,26 +1,31 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f7f3ec;
+  /* Ivory paper, aubergine (kokum) ink and accents, turmeric highlights. */
+  --background: #fdf7ee;
   --surface: #ffffff;
-  --muted: #efe9df;
-  --line: #e2d9cb;
-  --ink: #23201b;
-  --ink-soft: #6f675b;
-  --accent: #2f7a4f;
-  --good: #2f7a4f;
-  --bad: #c0392b;
+  --muted: #f5e9d8;
+  --line: #ead8bf;
+  --ink: #2b1d2a;
+  --ink-soft: #77657a;
+  --accent: #7d2a57;
+  --highlight: #e8a317;
+  --highlight-soft: #fbedc8;
+  --good: #2e7d4f;
+  --bad: #c2412d;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #161512;
-    --surface: #211f1b;
-    --muted: #2c2924;
-    --line: #3a362f;
-    --ink: #f1ece3;
-    --ink-soft: #a89f91;
-    --accent: #4fae78;
+    --background: #1b1420;
+    --surface: #251c2b;
+    --muted: #322739;
+    --line: #44364c;
+    --ink: #f6ecf1;
+    --ink-soft: #b8a6bd;
+    --accent: #b04a83;
+    --highlight: #f0b43a;
+    --highlight-soft: #4a3a1c;
     --good: #5cc08a;
     --bad: #ef6f5f;
   }
@@ -34,16 +39,25 @@
   --color-ink: var(--ink);
   --color-ink-soft: var(--ink-soft);
   --color-accent: var(--accent);
+  --color-highlight: var(--highlight);
+  --color-highlight-soft: var(--highlight-soft);
   --color-good: var(--good);
   --color-bad: var(--bad);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-figtree);
+  --font-display: var(--font-bricolage);
 }
 
 body {
   background: var(--background);
   color: var(--ink);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-family: var(--font-figtree), system-ui, sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-bricolage), var(--font-figtree), sans-serif;
+  letter-spacing: -0.01em;
 }
 
 @layer components {
