@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
+import DecimalInput from "@/components/DecimalInput";
 import { supabase } from "@/lib/supabase";
 import { PRODUCE, findProduce, type Produce } from "@/lib/produce";
 import {
@@ -61,7 +62,6 @@ function lineFor(p: Produce, saved?: SavedRate): VegLine {
 }
 
 const num = (s: string) => (s.trim() === "" ? NaN : Number(s));
-const show = (n: number) => (Number.isFinite(n) ? String(n) : "");
 
 export default function VegCalculator() {
   const { householdId } = useHousehold();
@@ -217,9 +217,9 @@ export default function VegCalculator() {
   const chips = PRODUCE.filter((p) => p.category === tab);
 
   return (
-    <div className="flex flex-col gap-5 pb-48">
+    <div className="flex flex-col gap-5 pb-48 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-start lg:gap-8 lg:pb-12">
       {/* Quick pick */}
-      <section className="rounded-2xl bg-surface p-4 shadow-sm">
+      <section className="rounded-2xl bg-surface p-4 shadow-sm lg:sticky lg:top-24">
         <div className="mb-3 flex gap-2">
           {(["vegetable", "fruit"] as const).map((t) => (
             <button
@@ -264,9 +264,10 @@ export default function VegCalculator() {
         </form>
       </section>
 
+      <div className="flex flex-col gap-5">
       {/* Lines */}
       {lines.length === 0 ? (
-        <p className="px-2 text-center text-ink-soft">Tap an item above to start the bill.</p>
+        <p className="rounded-2xl border border-dashed border-line px-4 py-10 text-center text-ink-soft">Tap an item <span className="lg:hidden">above</span><span className="hidden lg:inline">on the left</span> to start the bill.</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {lines.map((l) => {
@@ -287,12 +288,12 @@ export default function VegCalculator() {
                   <label className="flex flex-col gap-1 text-xs text-ink-soft">
                     Rate (₹)
                     <div className="flex overflow-hidden rounded-xl border border-line bg-background">
-                      <input
-                        inputMode="decimal"
-                        value={show(l.rate)}
-                        onChange={(e) => update(l.id, { rate: num(e.target.value) })}
+                      <DecimalInput
+                        value={l.rate}
+                        onChange={(n) => update(l.id, { rate: n })}
                         className="w-full min-w-0 bg-transparent px-3 py-2.5 text-lg text-ink"
                         placeholder="40"
+                        aria-label={`${l.name} rate`}
                       />
                     </div>
                     <select
@@ -313,12 +314,12 @@ export default function VegCalculator() {
                   <label className="flex flex-col gap-1 text-xs text-ink-soft">
                     Buying
                     <div className="flex overflow-hidden rounded-xl border border-line bg-background">
-                      <input
-                        inputMode="decimal"
-                        value={show(l.qty)}
-                        onChange={(e) => update(l.id, { qty: num(e.target.value) })}
+                      <DecimalInput
+                        value={l.qty}
+                        onChange={(n) => update(l.id, { qty: n })}
                         className="w-full min-w-0 bg-transparent px-3 py-2.5 text-lg text-ink"
-                        placeholder={l.qtyUnit === "g" ? "500" : "1"}
+                        placeholder={l.qtyUnit === "g" ? "500" : "0.5"}
+                        aria-label={`${l.name} quantity`}
                       />
                     </div>
                     <select
@@ -363,8 +364,8 @@ export default function VegCalculator() {
       {savedMsg && <p className="text-center text-sm font-medium text-good">{savedMsg}</p>}
 
       {/* Sticky total */}
-      <div className="fixed inset-x-0 bottom-0 border-t border-line bg-surface/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
-        <div className="mx-auto flex max-w-xl flex-col gap-2">
+      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-line bg-surface/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur lg:sticky lg:bottom-auto lg:top-20 lg:order-first lg:rounded-2xl lg:border lg:px-5 lg:pb-4 lg:shadow-sm">
+        <div className="mx-auto flex max-w-xl flex-col gap-2 lg:max-w-none">
           <div className="flex items-baseline justify-between">
             <span className="text-ink-soft">
               Total · {lines.length} item{lines.length === 1 ? "" : "s"}
@@ -397,6 +398,7 @@ export default function VegCalculator() {
             )}
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

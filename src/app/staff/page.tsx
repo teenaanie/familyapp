@@ -1,4 +1,4 @@
-import PageHeader from "@/components/PageHeader";
+import PageHeader, { PageMain } from "@/components/PageHeader";
 import StaffAttendance from "./StaffAttendance";
 
 // Rendered behind the client-side sign-in gate (see HouseholdProvider).
@@ -8,9 +8,9 @@ export const metadata = { title: "Staff attendance · Family" };
 
 export default function StaffPage() {
   return (
-    <main className="mx-auto w-full max-w-xl px-4 pt-6">
-      <PageHeader title="Staff attendance" />
+    <PageMain>
+      <PageHeader title="Staff attendance" subtitle="Tap a day to mark leave; pay is worked out for you." />
       <StaffAttendance />
-    </main>
+    </PageMain>
   );
 }

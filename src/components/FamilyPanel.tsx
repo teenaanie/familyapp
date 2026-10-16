@@ -38,7 +38,7 @@ export default function FamilyPanel() {
   }
 
   return (
-    <section className="mt-8 rounded-2xl bg-surface p-4 shadow-sm">
+    <section className="rounded-2xl bg-surface p-4 shadow-sm md:p-5">
       <h2 className="text-lg font-semibold">Family</h2>
       <ul className="mt-2 text-sm">
         {members.map((m) => (

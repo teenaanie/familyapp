@@ -59,18 +59,21 @@ export default function StaffAttendance() {
 
   return (
     <div className="flex flex-col gap-4 pb-16">
-      <MonthNav value={ym} onChange={setYm} />
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
+        <div className="md:w-80 md:shrink-0"><MonthNav value={ym} onChange={setYm} /></div>
       <p className="px-1 text-sm text-ink-soft">
         Everyone is present by default. Tap a day to mark <b className="text-bad">absent</b>, tap again for{" "}
         <b className="text-amber-600">half day</b>, once more to clear. Tap a day off to mark an{" "}
         <b className="text-good">extra day</b> worked.
       </p>
+      </div>
       {error && <p className="text-sm text-bad">{error}</p>}
       {rows === null && <p className="text-center text-ink-soft">Loading…</p>}
       {rows?.length === 0 && editing === null && (
         <p className="text-center text-ink-soft">No staff yet. Add your maid, cleaner, cook…</p>
       )}
 
+      <div className="grid items-start gap-4 lg:grid-cols-2">
       {rows?.map((r) => {
         const first = weekday(ym.year, ym.month, 1);
         const n = daysInMonth(ym.year, ym.month);
@@ -157,10 +160,11 @@ export default function StaffAttendance() {
           }}
         />
       ) : (
-        <button onClick={() => setEditing("new")} className="rounded-2xl border border-dashed border-line py-4 font-medium text-ink-soft">
+        <button onClick={() => setEditing("new")} className="min-h-24 rounded-2xl border border-dashed border-line py-4 font-medium text-ink-soft hover:bg-surface">
           + Add staff
         </button>
       )}
+      </div>
     </div>
   );
 }

@@ -108,15 +108,16 @@ export default function MonthlyPayments() {
 
   return (
     <div className="flex flex-col gap-4 pb-16">
-      <MonthNav value={ym} onChange={setYm} />
-
+      <div className="flex flex-col gap-3 md:flex-row md:items-stretch md:gap-4">
+      <div className="md:w-80 md:shrink-0 md:self-center"><MonthNav value={ym} onChange={setYm} /></div>
       {rows && rows.length > 0 && (
-        <dl className="grid grid-cols-3 gap-2 text-center">
+        <dl className="grid flex-1 grid-cols-3 gap-2 text-center">
           <Stat label="Expected" value={formatRupees(totals.expected)} />
           <Stat label="Paid" value={formatRupees(totals.paid)} />
           <Stat label="Pending" value={`${pendingCount} · ${formatRupees(Math.max(0, totals.expected - totals.paid))}`} highlight={pendingCount > 0} />
         </dl>
       )}
+      </div>
 
       {error && <p className="text-sm text-bad">{error}</p>}
       {rows === null && <p className="text-center text-ink-soft">Loading…</p>}
@@ -126,7 +127,7 @@ export default function MonthlyPayments() {
         </p>
       )}
 
-      <ul className="flex flex-col gap-3">
+      <ul className="grid items-start gap-3 lg:grid-cols-2">
         {rows?.map((r) => {
           const done = r.expected !== null ? r.paid >= r.expected : r.paid > 0;
           const remaining = r.expected !== null ? Math.max(0, r.expected - r.paid) : null;
@@ -217,7 +218,7 @@ export default function MonthlyPayments() {
           }}
         />
       ) : (
-        <button onClick={() => setEditing("new")} className="rounded-2xl border border-dashed border-line py-4 font-medium text-ink-soft">
+        <button onClick={() => setEditing("new")} className="rounded-2xl border border-dashed border-line py-4 font-medium text-ink-soft hover:bg-surface lg:w-[calc(50%-0.375rem)]">
           + Add someone you pay monthly
         </button>
       )}
@@ -343,7 +344,7 @@ function PayeeForm({ payee, onDone }: { payee: Payee | null; onDone: () => void 
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm">
+    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm lg:w-[calc(50%-0.375rem)]">
       <h2 className="text-lg font-semibold">{payee ? `Edit ${payee.name}` : "Add someone you pay monthly"}</h2>
       <Field label="Name">
         <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ravi (gardener)" className="input" />
