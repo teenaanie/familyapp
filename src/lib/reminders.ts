@@ -150,3 +150,16 @@ export function whenLabel(days: number): string {
 export function todayIST(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(now);
 }
+
+/** Every occurrence between two dates (inclusive), e.g. to lay reminders out by month. */
+export function occurrencesBetween(r: ReminderRule, from: string, to: string): string[] {
+  const out: string[] = [];
+  let next = occurrenceOnOrAfter(r, from);
+  const end = toDays(to);
+  while (next && toDays(next) <= end && out.length < 400) {
+    out.push(next);
+    if (r.recurrence === "none") break;
+    next = occurrenceOnOrAfter(r, fromDays(toDays(next) + 1));
+  }
+  return out;
+}

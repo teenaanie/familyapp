@@ -5,7 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import VoiceCommand from "@/components/VoiceCommand";
 import ListControls, { MatchCount, useRememberedSort } from "@/components/ListControls";
-import MonthNav, { thisMonth, type YearMonth } from "@/components/MonthNav";
+import MonthNav, { shiftMonth, thisMonth, type YearMonth } from "@/components/MonthNav";
+import MonthStrip from "@/components/MonthStrip";
 import { Field } from "@/app/staff/StaffAttendance";
 import { supabase } from "@/lib/supabase";
 import { loadStaffMonth } from "@/lib/staffData";
@@ -57,7 +58,27 @@ export default function MonthlyPayments() {
   const [query, setQuery] = useState("");
   const [sort, chooseSort] = useRememberedSort("payments.sort", ["due", "name", "pending"] as const, "due");
 
+  // Paid per month for the month strip: the past 11 months, this month and next month.
+  const stripMonths = Array.from({ length: 13 }, (_, i) => shiftMonth(thisMonth(), i - 11));
+  const [paidByMonth, setPaidByMonth] = useState<Map<string, number>>(new Map());
+  const loadTotals = useCallback(async () => {
+    const first = stripMonths[0];
+    const last = stripMonths[stripMonths.length - 1];
+    const { data } = await supabase
+      .from("payments")
+      .select("for_month, amount")
+      .eq("household_id", householdId)
+      .gte("for_month", monthKey(first.year, first.month))
+      .lte("for_month", monthKey(last.year, last.month));
+    const totals = new Map<string, number>();
+    for (const p of data ?? []) totals.set(p.for_month.slice(0, 7), (totals.get(p.for_month.slice(0, 7)) ?? 0) + Number(p.amount));
+    setPaidByMonth(totals);
+    // stripMonths only changes when the calendar month does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [householdId]);
+
   const reload = useCallback(async () => {
+    void loadTotals();
     try {
       const [{ data: payees, error: e1 }, { data: payments, error: e2 }, staff] = await Promise.all([
         supabase
@@ -98,7 +119,7 @@ export default function MonthlyPayments() {
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [householdId, ym]);
+  }, [householdId, ym, loadTotals]);
 
   useEffect(() => {
     // reload only sets state after its awaits resolve.
@@ -148,6 +169,15 @@ export default function MonthlyPayments() {
           Nobody to pay yet. Staff you add under Staff attendance appear here automatically; add others below.
         </p>
       )}
+
+      <MonthStrip
+        selected={ym}
+        onSelect={setYm}
+        months={stripMonths.map((m) => {
+          const paid = paidByMonth.get(`${m.year}-${String(m.month).padStart(2, "0")}`) ?? 0;
+          return { ...m, sub: paid ? `${formatRupees(Math.round(paid))} paid` : "Nothing paid", empty: paid === 0 };
+        })}
+      />
 
       {rows && rows.length > 0 && (
         <>

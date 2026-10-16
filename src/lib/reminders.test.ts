@@ -5,6 +5,7 @@ import {
   previousOccurrence,
   reminderStatus,
   occurrenceToMark,
+  occurrencesBetween,
   yearsLabel,
   todayIST,
   type ReminderRule,
@@ -98,4 +99,16 @@ test("birthdays are never overdue", () => {
 
 test("today in India crosses midnight before UTC does", () => {
   assert.equal(todayIST(new Date("2026-10-16T19:00:00Z")), "2026-10-17");
+});
+
+test("occurrences between two dates", () => {
+  const bill = rule({ kind: "bill", due_date: "2026-01-31", recurrence: "monthly" });
+  assert.deepEqual(occurrencesBetween(bill, "2026-10-01", "2026-12-31"), ["2026-10-31", "2026-11-30", "2026-12-31"]);
+  const bday = rule({ kind: "birthday", due_date: "1956-03-12", recurrence: "yearly" });
+  assert.deepEqual(occurrencesBetween(bday, "2026-10-01", "2027-09-30"), ["2027-03-12"]);
+  const once = rule({ due_date: "2026-11-02" });
+  assert.deepEqual(occurrencesBetween(once, "2026-10-01", "2027-09-30"), ["2026-11-02"]);
+  assert.deepEqual(occurrencesBetween(once, "2026-12-01", "2027-09-30"), []);
+  const every = rule({ due_date: "2026-10-01", recurrence: "every_n_days", every_n_days: 45 });
+  assert.deepEqual(occurrencesBetween(every, "2026-10-01", "2026-12-31"), ["2026-10-01", "2026-11-15", "2026-12-30"]);
 });

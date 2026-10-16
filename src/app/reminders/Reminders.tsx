@@ -8,7 +8,10 @@ import ListControls, { MatchCount, useRememberedSort } from "@/components/ListCo
 import { Field } from "@/app/staff/StaffAttendance";
 import { supabase } from "@/lib/supabase";
 import { KIND_EMOJI, loadReminders, prettyDate, repeatLabel, type Reminder, type ReminderView } from "@/lib/reminderData";
-import { occurrenceToMark, todayIST, whenLabel, yearsLabel, type Recurrence, type ReminderKind } from "@/lib/reminders";
+import { occurrencesBetween, occurrenceToMark, toDays, todayIST, whenLabel, yearsLabel, type Recurrence, type ReminderKind } from "@/lib/reminders";
+import { daysInMonth, dayKey, monthKey, MONTH_NAMES } from "@/lib/pay";
+import MonthStrip from "@/components/MonthStrip";
+import { shiftMonth, type YearMonth } from "@/components/MonthNav";
 
 const KINDS: { value: ReminderKind; label: string; repeat: Recurrence; leads: number[] }[] = [
   { value: "birthday", label: "Birthday", repeat: "yearly", leads: [1, 0] },
@@ -30,7 +33,11 @@ export default function Reminders() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Reminder | "new" | null>(null);
   const [query, setQuery] = useState("");
-  const [sort, chooseSort] = useRememberedSort("reminders.sort", ["date", "name"] as const, "date");
+  const [sort, chooseSort] = useRememberedSort("reminders.sort", ["date", "month", "name"] as const, "date");
+  const [monthSel, setMonthSel] = useState<YearMonth>(() => {
+    const t = todayIST();
+    return { year: Number(t.slice(0, 4)), month: Number(t.slice(5, 7)) };
+  });
 
   const reload = useCallback(() => {
     loadReminders(householdId).then(setRows).catch((e) => setError(e.message));
@@ -46,10 +53,24 @@ export default function Reminders() {
 
   const q = query.trim().toLowerCase();
   const shown = (rows ?? []).filter((r) => !q || r.title.toLowerCase().includes(q));
-  const overdue = shown.filter((r) => r.status.overdue);
-  const soon = shown.filter((r) => !r.status.overdue && (r.status.daysUntil ?? 99) <= 7);
-  const later = shown.filter((r) => !r.status.overdue && (r.status.daysUntil ?? 99) > 7);
-  const byName = [...shown].sort((a, b) => a.title.localeCompare(b.title, "en", { sensitivity: "base" }));
+  const today = todayIST();
+  const thisYm = { year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) };
+
+  // Date view: overdue first, then each upcoming reminder under the month it's next due.
+  const overdue: Entry[] = shown.filter((r) => r.status.overdue).map((r) => ({ r, date: r.status.overdue!.date }));
+  const upcomingByMonth = groupByMonth(shown.filter((r) => !r.status.overdue && r.status.next).map((r) => ({ r, date: r.status.next! })));
+
+  const byName: Entry[] = [...shown]
+    .sort((a, b) => a.title.localeCompare(b.title, "en", { sensitivity: "base" }))
+    .map((r) => ({ r, date: r.status.overdue?.date ?? r.status.next! }));
+
+  // Month view: every occurrence over the next 12 months, so monthly bills appear in each month.
+  const months = Array.from({ length: 12 }, (_, i) => shiftMonth(thisYm, i));
+  const yearStart = monthKey(months[0].year, months[0].month);
+  const yearEnd = dayKey(months[11].year, months[11].month, daysInMonth(months[11].year, months[11].month));
+  const occurrences = groupByMonth(shown.flatMap((r) => occurrencesBetween(r, yearStart, yearEnd).map((date) => ({ r, date }))));
+  const chosenKey = `${monthSel.year}-${String(monthSel.month).padStart(2, "0")}`;
+  const chosen = occurrences.get(chosenKey) ?? [];
 
   const form = editing && (
     <ReminderForm
@@ -81,19 +102,37 @@ export default function Reminders() {
             onSort={chooseSort}
             options={[
               { value: "date", label: "Reminder date" },
+              { value: "month", label: "By month" },
               { value: "name", label: "Name A–Z" },
             ]}
           />
         )}
         <MatchCount query={query} shown={shown.length} total={rows?.length ?? 0} noun="reminders" />
-        {sort === "date" ? (
+        {sort === "date" && (
           <>
-            <Group title="Needs attention" items={overdue} tone="bad" onDone={markDone} onEdit={setEditing} />
-            <Group title="This week" items={soon} onDone={markDone} onEdit={setEditing} />
-            <Group title="Coming up" items={later} onDone={markDone} onEdit={setEditing} />
+            <Group title="Needs attention" entries={overdue} tone="bad" onDone={markDone} onEdit={setEditing} />
+            {[...upcomingByMonth].map(([key, entries]) => (
+              <Group key={key} title={monthTitle(key, thisYm)} entries={entries} onDone={markDone} onEdit={setEditing} />
+            ))}
           </>
-        ) : (
-          <Group title="All reminders, A–Z" items={byName} onDone={markDone} onEdit={setEditing} />
+        )}
+        {sort === "name" && <Group title="All reminders, A–Z" entries={byName} onDone={markDone} onEdit={setEditing} />}
+        {sort === "month" && rows && rows.length > 0 && (
+          <>
+            <MonthStrip
+              selected={monthSel}
+              onSelect={setMonthSel}
+              months={months.map((m) => {
+                const n = occurrences.get(`${m.year}-${String(m.month).padStart(2, "0")}`)?.length ?? 0;
+                return { ...m, sub: n ? `${n} reminder${n === 1 ? "" : "s"}` : "None", empty: n === 0 };
+              })}
+            />
+            {chosen.length ? (
+              <Group title={monthTitle(chosenKey, thisYm)} entries={chosen} onDone={markDone} onEdit={setEditing} />
+            ) : (
+              <p className="rounded-2xl border border-dashed border-line px-4 py-8 text-center text-ink-soft">Nothing in {monthTitle(chosenKey, thisYm)}.</p>
+            )}
+          </>
         )}
         {/* On phones the form opens inline below the list. */}
         <div className="lg:hidden">
@@ -119,41 +158,65 @@ export default function Reminders() {
   );
 }
 
+/** Entries grouped under "YYYY-MM", in date order. */
+function groupByMonth(entries: Entry[]): Map<string, Entry[]> {
+  const sorted = [...entries].sort((a, b) => a.date.localeCompare(b.date) || a.r.title.localeCompare(b.r.title));
+  const map = new Map<string, Entry[]>();
+  for (const e of sorted) map.set(e.date.slice(0, 7), [...(map.get(e.date.slice(0, 7)) ?? []), e]);
+  return map;
+}
+
+function monthTitle(key: string, now: YearMonth) {
+  const [y, m] = key.split("-").map(Number);
+  const name = `${MONTH_NAMES[m - 1]}${y !== now.year ? ` ${y}` : ""}`;
+  return y === now.year && m === now.month ? `${name} · this month` : name;
+}
+
+interface Entry {
+  r: ReminderView;
+  /** The occurrence this card is about. */
+  date: string;
+}
+
 function Group({
   title,
-  items,
+  entries,
   tone,
   onDone,
   onEdit,
 }: {
   title: string;
-  items: ReminderView[];
+  entries: Entry[];
   tone?: "bad";
   onDone: (r: ReminderView) => void;
   onEdit: (r: Reminder) => void;
 }) {
-  if (!items.length) return null;
+  if (!entries.length) return null;
+  const today = todayIST();
+  const t = toDays(today);
   return (
     <section>
       <h2 className={`mb-2 text-sm font-semibold uppercase tracking-wide ${tone === "bad" ? "text-bad" : "text-ink-soft"}`}>{title}</h2>
       <ul className="grid gap-3 md:grid-cols-2">
-        {items.map((r) => {
+        {entries.map(({ r, date }) => {
           const s = r.status;
-          const date = s.overdue?.date ?? s.next!;
+          const days = toDays(date) - t;
+          const late = s.overdue?.date === date;
+          const done = r.done_for === date;
           const years = yearsLabel(r, date);
-          const actionable = Boolean(s.overdue) || (s.daysUntil ?? 99) <= 7;
+          const actionable = !done && date === occurrenceToMark(r, today) && (late || days <= 7);
           return (
-            <li key={r.id} className="flex gap-3 rounded-2xl bg-surface p-4 shadow-sm">
+            <li key={`${r.id}-${date}`} className="flex gap-3 rounded-2xl bg-surface p-4 shadow-sm">
               <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-highlight-soft text-xl">{KIND_EMOJI[r.kind]}</span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="font-semibold leading-snug">{r.title}</h3>
                   <span
                     className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      s.overdue ? "bg-bad/10 text-bad" : s.daysUntil === 0 ? "bg-highlight text-ink" : "bg-muted text-ink-soft"
+                      late ? "bg-bad/10 text-bad" : done ? "bg-good/15 text-good" : days === 0 ? "bg-highlight text-ink" : "bg-muted text-ink-soft"
                     }`}
                   >
-                    {s.overdue ? `${s.overdue.daysLate}d late` : whenLabel(s.daysUntil!)}
+                    {late ? `${s.overdue!.daysLate}d late` : done ? "Done ✓" : days < 0 ? "Past" : whenLabel(days)}
                   </span>
                 </div>
                 <p className="text-sm text-ink-soft">
