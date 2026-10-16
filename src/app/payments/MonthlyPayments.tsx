@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import VoiceCommand from "@/components/VoiceCommand";
@@ -17,6 +18,8 @@ interface Payee {
   expected_amount: number | null;
   due_day: number | null;
   staff_id: string | null;
+  frequency: "monthly" | "weekly";
+  note: string | null;
 }
 
 interface Payment {
@@ -56,7 +59,7 @@ export default function MonthlyPayments() {
       const [{ data: payees, error: e1 }, { data: payments, error: e2 }, staff] = await Promise.all([
         supabase
           .from("payees")
-          .select("id, name, category, expected_amount, due_day, staff_id")
+          .select("id, name, category, expected_amount, due_day, staff_id, frequency, note")
           .eq("household_id", householdId)
           .eq("active", true)
           .order("due_day", { nullsFirst: false })
@@ -78,7 +81,12 @@ export default function MonthlyPayments() {
             .map((x) => ({ ...x, amount: Number(x.amount) }));
           return {
             payee: { ...p, expected_amount: p.expected_amount === null ? null : Number(p.expected_amount) },
-            expected: p.staff_id ? (payable.get(p.staff_id) ?? null) : p.expected_amount === null ? null : Number(p.expected_amount),
+            // Weekly payees have no single monthly figure; they just show what was paid this month.
+            expected: p.staff_id
+              ? (payable.get(p.staff_id) ?? null)
+              : p.frequency === "weekly" || p.expected_amount === null
+                ? null
+                : Number(p.expected_amount),
             payments: mine,
             paid: mine.reduce((s, x) => s + x.amount, 0),
           };
@@ -131,7 +139,21 @@ export default function MonthlyPayments() {
 
       <ul className="grid items-start gap-3 lg:grid-cols-2">
         {rows?.map((r) => {
-          const done = r.expected !== null ? r.paid >= r.expected : r.paid > 0;
+          if (editing !== "new" && editing?.id === r.payee.id) {
+            return (
+              <li key={r.payee.id}>
+                <PayeeForm
+                  payee={editing}
+                  onDone={() => {
+                    setEditing(null);
+                    reload();
+                  }}
+                />
+              </li>
+            );
+          }
+          const weekly = r.payee.frequency === "weekly";
+          const done = weekly ? false : r.expected !== null ? r.paid >= r.expected : r.paid > 0;
           const remaining = r.expected !== null ? Math.max(0, r.expected - r.paid) : null;
           return (
             <li key={r.payee.id} className="rounded-2xl bg-surface p-4 shadow-sm">
@@ -139,21 +161,42 @@ export default function MonthlyPayments() {
                 <div className="min-w-0">
                   <h2 className="text-lg font-semibold">{r.payee.name}</h2>
                   <p className="text-sm text-ink-soft">
-                    {[r.payee.category, r.payee.due_day ? `due on ${r.payee.due_day}` : null, r.payee.staff_id ? "salary from attendance" : null]
+                    {[
+                      r.payee.category,
+                      weekly ? "weekly" : r.payee.due_day ? `due on ${r.payee.due_day}` : null,
+                      r.payee.staff_id ? "salary from attendance" : null,
+                      r.payee.note,
+                    ]
                       .filter(Boolean)
                       .join(" · ")}
                   </p>
                 </div>
                 <div className="shrink-0 text-right">
                   <div className="text-lg font-bold tabular-nums">
-                    {r.expected !== null ? formatRupees(r.expected) : "varies"}
+                    {r.expected !== null
+                      ? formatRupees(r.expected)
+                      : weekly && r.payee.expected_amount !== null
+                        ? `${formatRupees(Number(r.payee.expected_amount))}/wk`
+                        : "varies"}
                   </div>
                   <span
                     className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      done ? "bg-good/15 text-good" : r.paid > 0 ? "bg-amber-400/20 text-amber-700" : "bg-bad/10 text-bad"
+                      weekly
+                        ? "bg-muted text-ink-soft"
+                        : done
+                          ? "bg-good/15 text-good"
+                          : r.paid > 0
+                            ? "bg-amber-400/20 text-amber-700"
+                            : "bg-bad/10 text-bad"
                     }`}
                   >
-                    {done ? "Paid ✓" : r.paid > 0 ? `${formatRupees(remaining ?? 0)} left` : "Pending"}
+                    {weekly
+                      ? `${formatRupees(r.paid)} this month`
+                      : done
+                        ? "Paid ✓"
+                        : r.paid > 0
+                          ? `${formatRupees(remaining ?? 0)} left`
+                          : "Pending"}
                   </span>
                 </div>
               </div>
@@ -199,8 +242,12 @@ export default function MonthlyPayments() {
                       Add another payment
                     </button>
                   )}
-                  {!r.payee.staff_id && (
-                    <button onClick={() => setEditing(r.payee)} className="ml-auto text-sm text-ink-soft underline">
+                  {r.payee.staff_id ? (
+                    <Link href="/staff" className="ml-auto rounded-lg bg-muted px-3 py-1 text-sm font-medium">
+                      Edit in Staff
+                    </Link>
+                  ) : (
+                    <button onClick={() => setEditing(r.payee)} className="ml-auto rounded-lg bg-muted px-3 py-1 text-sm font-medium">
                       Edit
                     </button>
                   )}
@@ -211,17 +258,19 @@ export default function MonthlyPayments() {
         })}
       </ul>
 
-      {editing ? (
+      {editing === "new" ? (
+        <div className="lg:w-[calc(50%-0.375rem)]">
         <PayeeForm
-          payee={editing === "new" ? null : editing}
+          payee={null}
           onDone={() => {
             setEditing(null);
             reload();
           }}
         />
+        </div>
       ) : (
         <button onClick={() => setEditing("new")} className="rounded-2xl border border-dashed border-line py-4 font-medium text-ink-soft hover:bg-surface lg:w-[calc(50%-0.375rem)]">
-          + Add someone you pay monthly
+          + Add someone you pay regularly
         </button>
       )}
     </div>
@@ -321,6 +370,8 @@ function PayeeForm({ payee, onDone }: { payee: Payee | null; onDone: () => void 
   const [category, setCategory] = useState(payee?.category ?? "");
   const [amount, setAmount] = useState(payee?.expected_amount != null ? String(payee.expected_amount) : "");
   const [dueDay, setDueDay] = useState(payee?.due_day ? String(payee.due_day) : "");
+  const [frequency, setFrequency] = useState<Payee["frequency"]>(payee?.frequency ?? "monthly");
+  const [note, setNote] = useState(payee?.note ?? "");
   const [error, setError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
@@ -330,7 +381,9 @@ function PayeeForm({ payee, onDone }: { payee: Payee | null; onDone: () => void 
       name: name.trim(),
       category: category.trim() || null,
       expected_amount: amount.trim() ? Number(amount) : null,
-      due_day: day >= 1 && day <= 31 ? day : null,
+      due_day: frequency === "monthly" && day >= 1 && day <= 31 ? day : null,
+      frequency,
+      note: note.trim() || null,
     };
     const { error } = payee
       ? await supabase.from("payees").update(row).eq("id", payee.id)
@@ -346,8 +399,8 @@ function PayeeForm({ payee, onDone }: { payee: Payee | null; onDone: () => void 
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm lg:w-[calc(50%-0.375rem)]">
-      <h2 className="text-lg font-semibold">{payee ? `Edit ${payee.name}` : "Add someone you pay monthly"}</h2>
+    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm ring-2 ring-accent/30">
+      <h2 className="text-lg font-semibold">{payee ? `Edit ${payee.name}` : "Add someone you pay regularly"}</h2>
       <Field label="Name">
         <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ravi (gardener)" className="input" />
       </Field>
@@ -359,14 +412,33 @@ function PayeeForm({ payee, onDone }: { payee: Payee | null; onDone: () => void 
           ))}
         </datalist>
       </Field>
+      <Field label="How often">
+        <div className="flex gap-1.5">
+          {(["monthly", "weekly"] as const).map((f) => (
+            <button
+              type="button"
+              key={f}
+              onClick={() => setFrequency(f)}
+              className={`rounded-lg px-3 py-1.5 text-sm ${frequency === f ? "bg-accent text-white" : "bg-muted text-ink-soft"}`}
+            >
+              {f === "monthly" ? "Every month" : "Every week"}
+            </button>
+          ))}
+        </div>
+      </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Usual amount (₹)">
-          <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Leave blank if it varies" className="input" />
+        <Field label={`Usual amount per ${frequency === "weekly" ? "week" : "month"} (₹)`}>
+          <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Blank if it varies" className="input" />
         </Field>
-        <Field label="Due on day">
-          <input inputMode="numeric" value={dueDay} onChange={(e) => setDueDay(e.target.value)} placeholder="1–31" className="input" />
-        </Field>
+        {frequency === "monthly" && (
+          <Field label="Due on day">
+            <input inputMode="numeric" value={dueDay} onChange={(e) => setDueDay(e.target.value)} placeholder="1–31" className="input" />
+          </Field>
+        )}
       </div>
+      <Field label="Note (optional)">
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. ₹2,000–3,000 a week" className="input" />
+      </Field>
       {error && <p className="text-sm text-bad">{error}</p>}
       <div className="flex items-center gap-3">
         <button className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white">Save</button>

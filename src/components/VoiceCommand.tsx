@@ -5,7 +5,7 @@ import { useState } from "react";
 import MicButton from "./MicButton";
 import { useHousehold } from "./HouseholdProvider";
 import { supabase } from "@/lib/supabase";
-import { matchName } from "@/lib/match";
+import { matchName, sameName } from "@/lib/match";
 import { findProduce } from "@/lib/produce";
 import { prettyDate } from "@/lib/reminderData";
 import { formatRupees, rateLabel, type VegLine } from "@/lib/veg";
@@ -133,7 +133,7 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: Scope
     });
 
     r.new_staff.forEach((n, i) => {
-      const exists = matchName(n.name, staff, (x) => x.name);
+      const exists = staff.find((x) => sameName(x.name, n.name));
       const days = n.work_days?.length ? [...n.work_days].sort() : [1, 2, 3, 4, 5, 6];
       const leaves = n.paid_leaves ?? 2;
       actions.push({
@@ -156,18 +156,18 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: Scope
     });
 
     r.new_payees.forEach((n, i) => {
-      const exists = matchName(n.name, payees, (x) => x.name);
-      const day = n.due_day && n.due_day >= 1 && n.due_day <= 31 ? Math.round(n.due_day) : null;
+      const exists = payees.find((x) => sameName(x.name, n.name));
+      const day = n.frequency === "monthly" && n.due_day && n.due_day >= 1 && n.due_day <= 31 ? Math.round(n.due_day) : null;
       actions.push({
         key: `payee${i}`,
         kind: "new_payee",
         icon: "🗓️",
-        text: `Pay monthly: ${n.name}${n.amount !== null ? ` · ${formatRupees(n.amount)}` : ""}${day ? ` · due on the ${ordinal(day)}` : ""}`,
+        text: `Pay ${n.frequency}: ${n.name}${n.amount !== null ? ` · ${formatRupees(n.amount)}` : ""}${day ? ` · due on the ${ordinal(day)}` : ""}${n.note ? ` · ${n.note}` : ""}`,
         problem: exists ? `"${exists.name}" is already in Monthly payments` : undefined,
         run: async () => {
           const { error } = await supabase
             .from("payees")
-            .insert({ household_id: householdId, name: n.name, category: n.category, expected_amount: n.amount, due_day: day });
+            .insert({ household_id: householdId, name: n.name, category: n.category, expected_amount: n.amount, due_day: day, frequency: n.frequency, note: n.note });
           if (error) throw error;
         },
       });

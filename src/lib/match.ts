@@ -23,3 +23,8 @@ export function matchName<T>(spoken: string, candidates: T[], nameOf: (c: T) => 
   }
   return bestScore >= 0.5 && !tie ? best : null;
 }
+
+/** Same name ignoring case, punctuation and "the" — used to spot true duplicates, not partial matches. */
+export function sameName(a: string, b: string): boolean {
+  return words(a).join(" ") === words(b).join(" ");
+}

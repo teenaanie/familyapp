@@ -77,6 +77,19 @@ export default function StaffAttendance() {
 
       <div className="grid items-start gap-4 lg:grid-cols-2">
       {rows?.map((r) => {
+        // Editing opens in place of the card, not at the bottom of the page.
+        if (editing !== "new" && editing?.id === r.staff.id) {
+          return (
+            <StaffForm
+              key={r.staff.id}
+              staff={editing}
+              onDone={() => {
+                setEditing(null);
+                reload();
+              }}
+            />
+          );
+        }
         const first = weekday(ym.year, ym.month, 1);
         const n = daysInMonth(ym.year, ym.month);
         return (
@@ -90,7 +103,7 @@ export default function StaffAttendance() {
                     .join(" · ")}
                 </p>
               </div>
-              <button onClick={() => setEditing(r.staff)} className="text-sm text-ink-soft underline">
+              <button onClick={() => setEditing(r.staff)} className="rounded-lg bg-muted px-3 py-1 text-sm font-medium">
                 Edit
               </button>
             </div>
@@ -153,9 +166,9 @@ export default function StaffAttendance() {
         );
       })}
 
-      {editing ? (
+      {editing === "new" ? (
         <StaffForm
-          staff={editing === "new" ? null : editing}
+          staff={null}
           onDone={() => {
             setEditing(null);
             reload();
@@ -219,7 +232,7 @@ function StaffForm({ staff, onDone }: { staff: Staff | null; onDone: () => void 
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm">
+    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm ring-2 ring-accent/30">
       <h2 className="text-lg font-semibold">{staff ? `Edit ${staff.name}` : "Add staff"}</h2>
       <Field label="Name">
         <input required value={name} onChange={(e) => setName(e.target.value)} className="input" />

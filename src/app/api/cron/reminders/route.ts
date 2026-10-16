@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     db.from("reminders").select("id, household_id, title, kind, due_date, recurrence, every_n_days, lead_days, shared, owner_id, done_for"),
     db.from("members").select("household_id, user_id"),
     db.from("push_subscriptions").select("id, user_id, endpoint, p256dh, auth"),
-    db.from("payees").select("id, household_id, name, expected_amount, due_day").eq("active", true).not("due_day", "is", null),
+    db.from("payees").select("id, household_id, name, expected_amount, due_day").eq("active", true).eq("frequency", "monthly").not("due_day", "is", null),
     db.from("payments").select("payee_id, amount").eq("for_month", monthStart),
   ]);
   const err = reminders.error ?? members.error ?? subs.error ?? payees.error ?? payments.error;

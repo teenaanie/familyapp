@@ -39,8 +39,10 @@ export const VoiceResult = z.object({
     z.object({
       name: z.string().describe("Who or what is paid, e.g. 'Kickboxing sir', 'Blind school donation'"),
       category: z.string().nullable().describe("Short type, e.g. Donation, Classes, Gardener, Newspaper"),
-      amount: z.number().nullable().describe("Usual monthly amount in rupees, null if not said"),
-      due_day: z.number().nullable().describe("Day of month it's paid (1–31), null if not said"),
+      frequency: z.enum(["monthly", "weekly"]),
+      amount: z.number().nullable().describe("Usual amount per payment in rupees; null if not said or if it varies"),
+      due_day: z.number().nullable().describe("Day of month it's paid (1–31) for monthly; null if not said or weekly"),
+      note: z.string().nullable().describe("Short detail worth keeping, e.g. '₹2,000–3,000 a week', 'Tamanna's allowance'"),
     }),
   ),
   new_staff: z.array(
@@ -132,6 +134,8 @@ PAYMENTS: people/things they pay monthly: ${ctx.payeeNames.join(", ") || "none y
 SETTING UP REGULAR PAYMENTS — describing who they pay each month is NOT a payment and NOT a reminder:
 - "Cook Anita monthly salary 9000 on the 1st" / "Shanta cleaning maid, 6000" → new_staff (people who come to work in the house: maid, cook, cleaner, driver, nanny, daily gardener). Name is just the person's name; role from the words around it.
 - "Kickboxing sir 2500 every month on the 5th", "Blind school donation 1000", "Old age home donation", "Kamla chachi from REC" → new_payees, name kept as they'd recognise it, without words like "monthly payment".
+- Weekly ones ("weekly allowance", "every week") → frequency weekly. A range like "2000 to 3000" → amount null and note "₹2,000–3,000 a week".
+- Name it so it's distinct from similar existing names (e.g. "Tamanna (allowance)" if "Tamanna Investment" already exists).
 - Only "paid / gave / transferred / sent" means money already handed over → payments.
 
 REMINDERS: birthdays and anniversaries repeat yearly; bills usually monthly; otherwise none. Use a future date unless it's a birth date.
