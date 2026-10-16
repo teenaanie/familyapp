@@ -1,6 +1,7 @@
 import Link from "next/link";
 import FamilyPanel from "@/components/FamilyPanel";
 import UpcomingPreview from "@/components/UpcomingPreview";
+import VoiceCommand from "@/components/VoiceCommand";
 import { PageMain } from "@/components/PageHeader";
 
 // Rendered behind the client-side sign-in gate (see HouseholdProvider).
@@ -18,6 +19,10 @@ export default function Home() {
     <PageMain>
       <h1 className="text-4xl font-bold text-accent md:text-5xl">Home</h1>
       <p className="mt-1 text-ink-soft md:text-lg">Our family helper</p>
+
+      <div className="mt-6 md:mt-8">
+        <VoiceCommand />
+      </div>
 
       <div className="mt-6 grid grid-cols-2 gap-3 md:mt-8 md:gap-4 lg:grid-cols-4">
         {TILES.map((t) => (

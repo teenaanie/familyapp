@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import DecimalInput from "@/components/DecimalInput";
+import MicButton from "@/components/MicButton";
+import type { VoiceResult } from "@/lib/voice";
 import { supabase } from "@/lib/supabase";
 import { PRODUCE, findProduce, type Produce } from "@/lib/produce";
 import {
@@ -168,6 +170,47 @@ export default function VegCalculator() {
   const vendor = num(vendorSaid);
   const diff = Number.isFinite(vendor) ? roundPaise(vendor - total) : null;
 
+  const [heard, setHeard] = useState<{ text: string; added: string[] } | null>(null);
+
+  function addSpoken(text: string, result: VoiceResult) {
+    const added: VegLine[] = result.veg_items.map((v) => {
+      const known = findProduce(v.name);
+      const name = known?.name ?? v.name;
+      const saved = rates[name];
+      // Fall back to the remembered rate when the vendor's price wasn't said.
+      const useSaved = v.rate === null && saved;
+      return {
+        id: newId(),
+        name,
+        rate: useSaved ? saved.rate : (v.rate ?? NaN),
+        rateQty: useSaved ? saved.rateQty : v.rate_qty,
+        rateUnit: useSaved ? saved.rateUnit : v.rate_unit,
+        qty: v.qty ?? NaN,
+        qtyUnit: v.qty_unit,
+      };
+    });
+    setLines((ls) => [...ls, ...added]);
+    for (const l of added) {
+      if (Number.isFinite(l.rate)) {
+        const r = { rate: l.rate, rateQty: l.rateQty, rateUnit: l.rateUnit };
+        setRates((rs) => {
+          const next = { ...rs, [l.name]: r };
+          save(RATES_KEY, next);
+          return next;
+        });
+        rememberRate(l.name, r);
+      }
+    }
+    setHeard({ text, added: added.map((l) => l.id) });
+    if (!added.length) setSavedMsg(result.unclear ?? "Didn't hear any items — try again.");
+  }
+
+  function undoSpoken() {
+    if (!heard) return;
+    setLines((ls) => ls.filter((l) => !heard.added.includes(l.id)));
+    setHeard(null);
+  }
+
   function add(p: Produce) {
     setLines((ls) => [...ls, lineFor(p, rates[p.name])]);
   }
@@ -218,8 +261,32 @@ export default function VegCalculator() {
 
   return (
     <div className="flex flex-col gap-5 pb-48 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-start lg:gap-8 lg:pb-12">
+      <div className="flex flex-col gap-4 lg:sticky lg:top-24">
+      {/* Voice */}
+      <section className="rounded-2xl bg-highlight-soft p-4 shadow-sm">
+        <MicButton
+          mode="veg"
+          label="Tap and say what you're buying"
+          hint={'e.g. "Tomato 40 a kilo, 600 grams. Bhindi paav 15, half kilo."'}
+          onResult={addSpoken}
+        />
+        {heard && heard.added.length > 0 && (
+          <div className="mt-3 rounded-xl bg-surface p-3 text-sm">
+            <p className="text-ink-soft">
+              Heard: <span className="italic text-ink">&ldquo;{heard.text}&rdquo;</span>
+            </p>
+            <p className="mt-1 flex items-center gap-3">
+              <span className="font-medium text-good">
+                Added {heard.added.length} item{heard.added.length === 1 ? "" : "s"} — check the numbers below.
+              </span>
+              <button onClick={undoSpoken} className="ml-auto text-ink-soft underline">Undo</button>
+            </p>
+          </div>
+        )}
+      </section>
+
       {/* Quick pick */}
-      <section className="rounded-2xl bg-surface p-4 shadow-sm lg:sticky lg:top-24">
+      <section className="rounded-2xl bg-surface p-4 shadow-sm">
         <div className="mb-3 flex gap-2">
           {(["vegetable", "fruit"] as const).map((t) => (
             <button
@@ -263,6 +330,7 @@ export default function VegCalculator() {
           <button className="rounded-xl bg-ink px-4 py-2 font-medium text-background">Add</button>
         </form>
       </section>
+      </div>
 
       <div className="flex flex-col gap-5">
       {/* Lines */}
