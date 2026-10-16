@@ -1,6 +1,9 @@
 import Link from "next/link";
 import VegCalculator from "./VegCalculator";
 
+// Rendered behind the client-side sign-in gate (see HouseholdProvider).
+export const instant = false;
+
 export const metadata = { title: "Vegetable bill · Family" };
 
 export default function VegPage() {

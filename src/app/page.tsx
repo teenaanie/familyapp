@@ -1,6 +1,9 @@
 import Link from "next/link";
 import FamilyPanel from "@/components/FamilyPanel";
 
+// Rendered behind the client-side sign-in gate (see HouseholdProvider).
+export const instant = false;
+
 const TILES = [
   { href: "/veg", title: "Vegetable bill", note: "Check the vendor's maths", ready: true, emoji: "🥕" },
   { href: "#", title: "Reminders", note: "Birthdays, bills, anniversaries", ready: false, emoji: "🔔" },
