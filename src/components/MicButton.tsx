@@ -7,7 +7,7 @@ import type { VoiceMode, VoiceResult } from "@/lib/voice";
 
 const MAX_SECONDS = 60;
 
-type Phase = "idle" | "starting" | "recording" | "working";
+type Phase = "idle" | "starting" | "recording" | "transcribing" | "review" | "working";
 
 async function authHeader() {
   const { data } = await supabase.auth.getSession();
@@ -47,6 +47,8 @@ export default function MicButton({
   const [seconds, setSeconds] = useState(0);
   const [live, setLive] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** The words, editable before they're interpreted. */
+  const [draft, setDraft] = useState("");
 
   const stream = useRef<MediaStream | null>(null);
   const audioCtx = useRef<AudioContext | null>(null);
@@ -116,7 +118,7 @@ export default function MicButton({
     rec.onstop = () => {
       const blob = new Blob(chunks, { type: rec.mimeType || mimeType || "audio/mp4" });
       cleanup();
-      void submit((form) => form.append("audio", new File([blob], "speech", { type: blob.type })), blob.size < 1000);
+      void transcribeRecording(blob);
     };
     recorder.current = rec;
     rec.start();
@@ -125,39 +127,76 @@ export default function MicButton({
   async function stop() {
     if (phase !== "recording") return;
     if (timer.current) clearInterval(timer.current);
-    setPhase("working");
+    setPhase("transcribing");
     if (session.current) {
       const text = await session.current.stop();
       session.current = null;
       cleanup();
-      setLive(text);
-      await submit((form) => form.append("text", text), !text);
+      review(text);
     } else if (recorder.current?.state === "recording") {
-      recorder.current.stop(); // onstop submits
+      recorder.current.stop(); // onstop transcribes
     }
   }
   stopRef.current = stop;
 
-  async function submit(fill: (f: FormData) => void, empty: boolean) {
-    if (empty) {
-      setPhase("idle");
-      return setError("Didn't catch anything — try again a little closer to the phone.");
-    }
+  async function transcribeRecording(blob: Blob) {
+    if (blob.size < 1000) return review("");
     try {
       const form = new FormData();
       form.append("mode", mode);
-      fill(form);
-      const { text, result } = await sendToVoiceApi(form);
-      setLive("");
-      onResult(text, result);
+      form.append("stage", "transcribe");
+      form.append("audio", new File([blob], "speech", { type: blob.type }));
+      const res = await fetch("/api/voice", { method: "POST", headers: await authHeader(), body: form });
+      const json = await res.json().catch(() => ({}));
+      review(res.ok ? json.text : "");
+      if (!res.ok) setError(json.error ?? "Couldn't hear that — type it instead, or try again.");
     } catch (e) {
+      review("");
       setError((e as Error).message);
-    } finally {
-      setPhase("idle");
     }
   }
 
-  const busy = phase === "starting" || phase === "working";
+  function review(text: string) {
+    setLive("");
+    // Speaking again while reviewing adds to what's already there.
+    setDraft((prev) => [prev.trim(), text.trim()].filter(Boolean).join(" "));
+    setPhase("review");
+    if (!text) setError("Didn't catch anything — type it below, or tap the mic to try again.");
+    else setError(null);
+  }
+
+  function cancel() {
+    setDraft("");
+    setError(null);
+    setPhase("idle");
+  }
+
+  function typeInstead() {
+    setError(null);
+    setDraft("");
+    setPhase("review");
+  }
+
+  async function submit() {
+    const text = draft.trim();
+    if (!text) return setError("Nothing to use yet — type or say something first.");
+    setError(null);
+    setPhase("working");
+    try {
+      const form = new FormData();
+      form.append("mode", mode);
+      form.append("text", text);
+      const { result } = await sendToVoiceApi(form);
+      onResult(text, result);
+      setDraft("");
+      setPhase("idle");
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase("review");
+    }
+  }
+
+  const busy = phase === "starting" || phase === "transcribing" || phase === "working";
   return (
     <div>
       <div className="flex items-center gap-3">
@@ -188,17 +227,66 @@ export default function MicButton({
               ? "Getting the mic ready…"
               : phase === "recording"
                 ? `Listening… ${seconds}s — tap to finish`
-                : phase === "working"
-                  ? "Working out the numbers…"
-                  : label}
+                : phase === "transcribing"
+                  ? "Writing down what you said…"
+                  : phase === "review"
+                    ? "Check the words, fix anything, then Continue"
+                    : phase === "working"
+                      ? "Working out the details…"
+                      : label}
           </div>
-          {error ? <div className="text-bad">{error}</div> : hint && phase === "idle" && <div className="text-ink-soft">{hint}</div>}
+          {error ? (
+            <div className="text-bad">{error}</div>
+          ) : phase === "idle" ? (
+            <div className="text-ink-soft">
+              {hint}{" "}
+              <button type="button" onClick={typeInstead} className="font-medium text-accent underline">
+                Type instead
+              </button>
+            </div>
+          ) : phase === "review" ? (
+            <div className="text-ink-soft">Tap the mic to add more by voice.</div>
+          ) : null}
         </div>
       </div>
-      {(phase === "recording" || phase === "working") && (
+
+      {(phase === "recording" || phase === "transcribing") && (
         <p aria-live="polite" className="mt-3 min-h-12 rounded-xl bg-surface px-3 py-2 text-base leading-snug">
-          {live || <span className="text-ink-soft">{recorder.current && !session.current ? "Recording… words will show when you finish." : "Start speaking…"}</span>}
+          {draft && <span className="text-ink-soft">{draft} </span>}
+          {live || (
+            <span className="text-ink-soft">
+              {recorder.current && !session.current ? "Recording… words will show when you finish." : "Start speaking…"}
+            </span>
+          )}
         </p>
+      )}
+
+      {(phase === "review" || phase === "working") && (
+        <div className="mt-3 flex flex-col gap-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={phase === "working"}
+            rows={3}
+            autoFocus={!draft}
+            aria-label="What you said — edit if needed"
+            placeholder={hint ?? "Type here"}
+            className="input w-full resize-y text-base leading-snug"
+          />
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={submit}
+              disabled={phase === "working" || !draft.trim()}
+              className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-50"
+            >
+              {phase === "working" ? "Working…" : "Continue"}
+            </button>
+            <button type="button" onClick={cancel} disabled={phase === "working"} className="text-sm text-ink-soft underline">
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

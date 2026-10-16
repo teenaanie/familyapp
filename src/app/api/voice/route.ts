@@ -49,6 +49,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "Nothing to process" }, { status: 400 });
     }
     if (!text) return Response.json({ text, error: "Didn't catch anything — try again a little closer to the phone." }, { status: 422 });
+    // Transcribe only, so the person can correct the words before they're interpreted.
+    if (form.get("stage") === "transcribe") return Response.json({ text });
 
     const result = await parseUtterance(text, ctx);
     return Response.json({ text, result });

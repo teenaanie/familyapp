@@ -4,49 +4,21 @@ import Link from "next/link";
 import { useState } from "react";
 import MicButton from "./MicButton";
 import { useHousehold } from "./HouseholdProvider";
+import { DraftEditor, icon, problem, save, summary, type Draft, type Lookups } from "./voiceDrafts";
 import { supabase } from "@/lib/supabase";
-import { matchName, sameName } from "@/lib/match";
+import { matchName } from "@/lib/match";
 import { findProduce } from "@/lib/produce";
-import { prettyDate } from "@/lib/reminderData";
-import { formatRupees, rateLabel, type VegLine } from "@/lib/veg";
 import type { VoiceResult } from "@/lib/voice";
 
-interface Named {
-  id: string;
-  name: string;
-}
-
-type ActionKind = "absence" | "payment" | "new_payee" | "new_staff" | "reminder" | "veg";
+type Scope = "any" | "staff" | "payments" | "reminders";
 
 /** What each page's mic is allowed to save. */
-const ALLOWED: Record<Scope, ActionKind[]> = {
+const ALLOWED: Record<Scope, Draft["kind"][]> = {
   any: ["absence", "payment", "new_payee", "new_staff", "reminder", "veg"],
   staff: ["absence", "new_staff"],
   payments: ["payment", "new_payee", "new_staff"],
   reminders: ["reminder"],
 };
-
-type Scope = "any" | "staff" | "payments" | "reminders";
-
-const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-function ordinal(n: number) {
-  if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
-  return `${n}${{ 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th"}`;
-}
-
-interface Action {
-  key: string;
-  kind: ActionKind;
-  icon: string;
-  text: string;
-  /** Why it can't be saved (e.g. unknown name); shown instead of a checkbox. */
-  problem?: string;
-  run: () => Promise<void>;
-}
-
-const STATUS_TEXT = { absent: "absent", half_day: "half day", extra: "extra day worked" } as const;
-const REMINDER_LEADS = { birthday: [1, 0], anniversary: [3, 0], bill: [3, 0], custom: [0] } as const;
 
 const COPY = {
   any: {
@@ -67,135 +39,53 @@ const COPY = {
   },
 } as const;
 
-/**
- * Voice panel: one sentence can mark leave, record payments, add reminders and veg items.
- * On the staff and payments pages it focuses on that page's kind of entry.
- */
-export default function VoiceCommand({ scope = "any", onSaved }: { scope?: Scope; onSaved?: () => void }) {
-  const { householdId } = useHousehold();
-  const [heard, setHeard] = useState<{ text: string; actions: Action[]; unclear: string | null } | null>(null);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
+interface Item {
+  key: string;
+  draft: Draft;
+  checked: boolean;
+  editing: boolean;
+}
 
-  async function onResult(text: string, r: VoiceResult) {
-    // Fresh names each time, so someone added a moment ago is recognised.
-    const [{ data: staffRows }, { data: payeeRows }] = await Promise.all([
-      supabase.from("staff").select("id, name").eq("household_id", householdId).eq("active", true),
-      supabase.from("payees").select("id, name, staff_id").eq("household_id", householdId).eq("active", true),
-    ]);
-    const staff: Named[] = staffRows ?? [];
-    const payees: (Named & { staff_id: string | null })[] = payeeRows ?? [];
-    const actions: Action[] = [];
-
-    r.absences.forEach((a, i) => {
-      const who = matchName(a.staff_name, staff, (s) => s.name);
-      actions.push({
-        key: `abs${i}`,
-        kind: "absence",
-        icon: "🧹",
-        text: `${who?.name ?? a.staff_name} — ${STATUS_TEXT[a.status]} on ${prettyDate(a.date)}`,
-        problem: who ? undefined : `No staff called "${a.staff_name}"`,
-        run: async () => {
-          const { error } = await supabase.from("attendance").upsert({ staff_id: who!.id, household_id: householdId, day: a.date, status: a.status });
-          if (error) throw error;
-        },
-      });
+/** Turns the parsed result into editable drafts, matching spoken names to people already added. */
+function toDrafts(r: VoiceResult, l: Lookups): Draft[] {
+  const drafts: Draft[] = [];
+  for (const a of r.absences) {
+    drafts.push({ kind: "absence", spoken: a.staff_name, staff_id: matchName(a.staff_name, l.staff, (s) => s.name)?.id ?? null, date: a.date, status: a.status });
+  }
+  for (const p of r.payments) {
+    // A staff member's name should find their salary payee too.
+    const staff = matchName(p.payee_name, l.staff, (s) => s.name);
+    const payee = matchName(p.payee_name, l.payees, (x) => x.name) ?? (staff ? l.payees.find((x) => x.staff_id === staff.id) : undefined);
+    drafts.push({ kind: "payment", spoken: p.payee_name, payee_id: payee?.id ?? null, amount: p.amount, date: p.date, mode: p.mode, is_advance: p.is_advance });
+  }
+  for (const n of r.new_staff) {
+    drafts.push({
+      kind: "new_staff",
+      name: n.name,
+      role: n.role ?? "",
+      salary: n.monthly_salary,
+      work_days: n.work_days?.length ? n.work_days : [1, 2, 3, 4, 5, 6],
+      leaves: n.paid_leaves ?? 2,
     });
-
-    r.payments.forEach((p, i) => {
-      // A staff member's name should find their salary payee too.
-      const payee =
-        matchName(p.payee_name, payees, (x) => x.name) ??
-        (() => {
-          const s = matchName(p.payee_name, staff, (x) => x.name);
-          return s ? (payees.find((x) => x.staff_id === s.id) ?? null) : null;
-        })();
-      actions.push({
-        key: `pay${i}`,
-        kind: "payment",
-        icon: "💸",
-        text: `Paid ${payee?.name ?? p.payee_name} ${formatRupees(p.amount)}${p.mode ? ` by ${p.mode.toUpperCase()}` : ""}${p.is_advance ? " (advance)" : ""} on ${prettyDate(p.date)}`,
-        problem: payee ? undefined : `No payee called "${p.payee_name}" — add them under Monthly payments`,
-        run: async () => {
-          const { error } = await supabase.from("payments").insert({
-            household_id: householdId,
-            payee_id: payee!.id,
-            for_month: `${p.date.slice(0, 7)}-01`,
-            amount: p.amount,
-            paid_on: p.date,
-            mode: p.mode,
-            is_advance: p.is_advance,
-          });
-          if (error) throw error;
-        },
-      });
+  }
+  for (const n of r.new_payees) {
+    drafts.push({
+      kind: "new_payee",
+      name: n.name,
+      category: n.category ?? "",
+      frequency: n.frequency,
+      amount: n.amount,
+      due_day: n.due_day && n.due_day >= 1 && n.due_day <= 31 ? Math.round(n.due_day) : null,
+      note: n.note ?? "",
     });
-
-    r.new_staff.forEach((n, i) => {
-      const exists = staff.find((x) => sameName(x.name, n.name));
-      const days = n.work_days?.length ? [...n.work_days].sort() : [1, 2, 3, 4, 5, 6];
-      const leaves = n.paid_leaves ?? 2;
-      actions.push({
-        key: `staff${i}`,
-        kind: "new_staff",
-        icon: "🧹",
-        text: `Add staff: ${n.name}${n.role ? ` (${n.role})` : ""}, ${n.monthly_salary !== null ? `${formatRupees(n.monthly_salary)}/month` : "salary not said"} · ${days.map((d) => DAY_SHORT[d]).join(" ")} · ${leaves} paid leave${leaves === 1 ? "" : "s"}`,
-        problem: exists ? `${exists.name} is already on your staff list` : undefined,
-        run: async () => {
-          const { data, error } = await supabase
-            .from("staff")
-            .insert({ household_id: householdId, name: n.name, role: n.role, monthly_salary: n.monthly_salary ?? 0, work_days: days, paid_leaves_per_month: leaves })
-            .select("id")
-            .single();
-          if (error) throw error;
-          // Same as adding staff by hand: they also appear in Monthly payments, salary from attendance.
-          await supabase.from("payees").insert({ household_id: householdId, name: n.name, category: n.role ?? "Staff", staff_id: data.id });
-        },
-      });
-    });
-
-    r.new_payees.forEach((n, i) => {
-      const exists = payees.find((x) => sameName(x.name, n.name));
-      const day = n.frequency === "monthly" && n.due_day && n.due_day >= 1 && n.due_day <= 31 ? Math.round(n.due_day) : null;
-      actions.push({
-        key: `payee${i}`,
-        kind: "new_payee",
-        icon: "🗓️",
-        text: `Pay ${n.frequency}: ${n.name}${n.amount !== null ? ` · ${formatRupees(n.amount)}` : ""}${day ? ` · due on the ${ordinal(day)}` : ""}${n.note ? ` · ${n.note}` : ""}`,
-        problem: exists ? `"${exists.name}" is already in Monthly payments` : undefined,
-        run: async () => {
-          const { error } = await supabase
-            .from("payees")
-            .insert({ household_id: householdId, name: n.name, category: n.category, expected_amount: n.amount, due_day: day, frequency: n.frequency, note: n.note });
-          if (error) throw error;
-        },
-      });
-    });
-
-    r.reminders.forEach((m, i) => {
-      actions.push({
-        key: `rem${i}`,
-        kind: "reminder",
-        icon: { birthday: "🎂", anniversary: "💍", bill: "🧾", custom: "📌" }[m.kind],
-        text: `Reminder: ${m.title} — ${prettyDate(m.date)}${m.recurrence === "yearly" ? ", every year" : m.recurrence === "monthly" ? ", every month" : m.recurrence === "every_n_days" ? `, every ${m.every_n_days} days` : ""}`,
-        run: async () => {
-          const { error } = await supabase.from("reminders").insert({
-            household_id: householdId,
-            title: m.title,
-            kind: m.kind,
-            due_date: m.date,
-            recurrence: m.recurrence,
-            every_n_days: m.recurrence === "every_n_days" ? (m.every_n_days ?? 30) : null,
-            lead_days: [...REMINDER_LEADS[m.kind]],
-          });
-          if (error) throw error;
-        },
-      });
-    });
-
-    if (r.veg_items.length) {
-      const lines: VegLine[] = r.veg_items.map((v, i) => ({
+  }
+  for (const m of r.reminders) {
+    drafts.push({ kind: "reminder", title: m.title, rkind: m.kind, date: m.date, recurrence: m.recurrence, every_n_days: m.every_n_days });
+  }
+  if (r.veg_items.length) {
+    drafts.push({
+      kind: "veg",
+      lines: r.veg_items.map((v, i) => ({
         id: `v${Date.now()}${i}`,
         name: findProduce(v.name)?.name ?? v.name,
         rate: v.rate ?? NaN,
@@ -203,44 +93,75 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: Scope
         rateUnit: v.rate_unit,
         qty: v.qty ?? NaN,
         qtyUnit: v.qty_unit,
-      }));
-      actions.push({
-        key: "veg",
-        kind: "veg",
-        icon: "🥕",
-        text: `Add to vegetable bill: ${lines.map((l) => `${l.name}${Number.isFinite(l.rate) ? ` (${rateLabel(l.rate, l.rateQty, l.rateUnit)})` : ""}`).join(", ")}`,
-        run: async () => {
-          // The open bill lives on this device; the bill page picks these up when opened.
-          const existing = JSON.parse(localStorage.getItem("veg.bill") ?? "[]");
-          localStorage.setItem("veg.bill", JSON.stringify([...existing, ...lines]));
-        },
-      });
-    }
+      })),
+    });
+  }
+  return drafts;
+}
 
-    const allowed = actions.filter((a) => ALLOWED[scope].includes(a.kind));
-    setHeard({ text, actions: allowed, unclear: r.unclear });
-    setChecked(new Set(allowed.filter((a) => !a.problem).map((a) => a.key)));
+/**
+ * Voice panel: one sentence can mark leave, record payments, add people, reminders and veg
+ * items. Everything understood is listed for checking and editing before it's saved.
+ */
+export default function VoiceCommand({ scope = "any", onSaved }: { scope?: Scope; onSaved?: () => void }) {
+  const { householdId } = useHousehold();
+  const [heard, setHeard] = useState<{ text: string; unclear: string | null } | null>(null);
+  const [items, setItems] = useState<Item[]>([]);
+  const [lookups, setLookups] = useState<Lookups>({ staff: [], payees: [] });
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+
+  async function onResult(text: string, r: VoiceResult) {
+    // Fresh names each time, so someone added a moment ago is recognised.
+    const [{ data: staff }, { data: payees }] = await Promise.all([
+      supabase.from("staff").select("id, name").eq("household_id", householdId).eq("active", true).order("name"),
+      supabase.from("payees").select("id, name, staff_id").eq("household_id", householdId).eq("active", true).order("name"),
+    ]);
+    const l: Lookups = { staff: staff ?? [], payees: payees ?? [] };
+    const drafts = toDrafts(r, l).filter((d) => ALLOWED[scope].includes(d.kind));
+    setLookups(l);
+    setItems(drafts.map((d, i) => ({ key: `${d.kind}${i}`, draft: d, checked: !problem(d, l), editing: false })));
+    setHeard({ text, unclear: r.unclear });
     setDone(null);
   }
 
+  function update(key: string, patch: Partial<Item>) {
+    setItems((its) =>
+      its.map((it) => {
+        if (it.key !== key) return it;
+        const next = { ...it, ...patch };
+        // Fixing a problem under Edit ticks the item; one that still has a problem can't be ticked.
+        if (patch.draft) {
+          const before = problem(it.draft, lookups);
+          const after = problem(patch.draft, lookups);
+          if (after) next.checked = false;
+          else if (before) next.checked = true;
+        }
+        return next;
+      }),
+    );
+  }
+
   async function apply() {
-    if (!heard) return;
     setBusy(true);
     const failed: string[] = [];
-    for (const a of heard.actions) {
-      if (!checked.has(a.key)) continue;
+    for (const it of items) {
+      if (!it.checked || problem(it.draft, lookups)) continue;
       try {
-        await a.run();
+        await save(it.draft, householdId);
       } catch (e) {
-        failed.push(`${a.text}: ${(e as Error).message}`);
+        failed.push(`${summary(it.draft, lookups)}: ${(e as Error).message}`);
       }
     }
     setBusy(false);
     onSaved?.();
-    const savedVeg = checked.has("veg");
+    const savedVeg = items.some((it) => it.checked && it.draft.kind === "veg");
     setHeard(null);
+    setItems([]);
     setDone(failed.length ? `Some things didn't save: ${failed.join("; ")}` : savedVeg ? "Saved. Vegetables added to your bill." : "Saved.");
   }
+
+  const toSave = items.filter((it) => it.checked && !problem(it.draft, lookups)).length;
 
   return (
     <section className="rounded-2xl bg-highlight-soft p-4 shadow-sm md:p-5">
@@ -249,50 +170,71 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: Scope
       {heard && (
         <div className="mt-4 rounded-xl bg-surface p-4">
           <p className="text-sm text-ink-soft">
-            Heard: <span className="italic text-ink">&ldquo;{heard.text}&rdquo;</span>
+            From: <span className="italic text-ink">&ldquo;{heard.text}&rdquo;</span>
           </p>
-          {heard.actions.length === 0 ? (
+          {items.length === 0 ? (
             <p className="mt-2 text-sm">{heard.unclear ?? "I couldn't find anything to save in that. Try again?"}</p>
           ) : (
             <>
-              <ul className="mt-3 flex flex-col gap-2">
-                {heard.actions.map((a) => (
-                  <li key={a.key} className="flex items-start gap-3">
-                    {a.problem ? (
-                      <span className="mt-0.5 text-bad">⚠︎</span>
-                    ) : (
-                      <input
-                        type="checkbox"
-                        className="mt-1 h-4 w-4 accent-[var(--accent)]"
-                        checked={checked.has(a.key)}
-                        onChange={(e) =>
-                          setChecked((c) => {
-                            const n = new Set(c);
-                            if (e.target.checked) n.add(a.key);
-                            else n.delete(a.key);
-                            return n;
-                          })
-                        }
-                      />
-                    )}
-                    <span className="text-sm">
-                      <span className="mr-1">{a.icon}</span>
-                      {a.text}
-                      {a.problem && <span className="block text-xs text-bad">{a.problem}</span>}
-                    </span>
-                  </li>
-                ))}
+              <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-ink-soft">Check before saving — tap Edit to change anything</p>
+              <ul className="mt-2 flex flex-col divide-y divide-line">
+                {items.map((it) => {
+                  const issue = problem(it.draft, lookups);
+                  return (
+                    <li key={it.key} className="py-2.5">
+                      <div className="flex items-start gap-3">
+                        {issue ? (
+                          <span className="mt-0.5 w-4 text-center text-bad" aria-label="Needs attention">⚠︎</span>
+                        ) : (
+                          <input
+                            type="checkbox"
+                            aria-label="Save this"
+                            className="mt-1 h-4 w-4 accent-[var(--accent)]"
+                            checked={it.checked}
+                            onChange={(e) => update(it.key, { checked: e.target.checked })}
+                          />
+                        )}
+                        <span className="min-w-0 flex-1 text-sm">
+                          <span className="mr-1">{icon(it.draft)}</span>
+                          {summary(it.draft, lookups)}
+                          {issue && <span className="block text-xs text-bad">{issue}</span>}
+                        </span>
+                        {it.draft.kind !== "veg" && (
+                          <button
+                            onClick={() => update(it.key, { editing: !it.editing })}
+                            className={`shrink-0 rounded-lg px-3 py-1 text-sm font-medium ${it.editing ? "bg-accent text-white" : "bg-muted"}`}
+                          >
+                            {it.editing ? "Done" : "Edit"}
+                          </button>
+                        )}
+                      </div>
+                      {it.editing && (
+                        <div className="mt-3 ml-7 rounded-xl bg-muted/60 p-3">
+                          <DraftEditor draft={it.draft} lookups={lookups} onChange={(d) => update(it.key, { draft: d })} />
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
               {heard.unclear && <p className="mt-2 text-xs text-ink-soft">Note: {heard.unclear}</p>}
               <div className="mt-4 flex items-center gap-3">
                 <button
                   onClick={apply}
-                  disabled={busy || checked.size === 0}
+                  disabled={busy || toSave === 0}
                   className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-50"
                 >
-                  {busy ? "Saving…" : `Save ${checked.size} item${checked.size === 1 ? "" : "s"}`}
+                  {busy ? "Saving…" : `Save ${toSave} item${toSave === 1 ? "" : "s"}`}
                 </button>
-                <button onClick={() => setHeard(null)} className="text-sm text-ink-soft underline">Discard</button>
+                <button
+                  onClick={() => {
+                    setHeard(null);
+                    setItems([]);
+                  }}
+                  className="text-sm text-ink-soft underline"
+                >
+                  Discard
+                </button>
               </div>
             </>
           )}
