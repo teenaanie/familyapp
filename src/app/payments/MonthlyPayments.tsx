@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
+import VoiceCommand from "@/components/VoiceCommand";
 import MonthNav, { thisMonth, type YearMonth } from "@/components/MonthNav";
 import { Field } from "@/app/staff/StaffAttendance";
 import { supabase } from "@/lib/supabase";
@@ -108,6 +109,7 @@ export default function MonthlyPayments() {
 
   return (
     <div className="flex flex-col gap-4 pb-16">
+      <VoiceCommand scope="payments" onSaved={reload} />
       <div className="flex flex-col gap-3 md:flex-row md:items-stretch md:gap-4">
       <div className="md:w-80 md:shrink-0 md:self-center"><MonthNav value={ym} onChange={setYm} /></div>
       {rows && rows.length > 0 && (

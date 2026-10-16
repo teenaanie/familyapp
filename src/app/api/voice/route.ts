@@ -20,7 +20,8 @@ export async function POST(request: Request) {
   if (!user.user) return Response.json({ error: "not signed in" }, { status: 401 });
 
   const form = await request.formData();
-  const mode: VoiceMode = form.get("mode") === "veg" ? "veg" : "any";
+  const requested = form.get("mode");
+  const mode: VoiceMode = requested === "veg" || requested === "staff" || requested === "payments" ? requested : "any";
   const audio = form.get("audio");
   const typed = form.get("text");
 

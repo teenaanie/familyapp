@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { startLive, type LiveSession } from "@/lib/liveTranscribe";
-import type { VoiceResult } from "@/lib/voice";
+import type { VoiceMode, VoiceResult } from "@/lib/voice";
 
 const MAX_SECONDS = 60;
 
@@ -38,7 +38,7 @@ export default function MicButton({
   hint,
   onResult,
 }: {
-  mode: "veg" | "any";
+  mode: VoiceMode;
   label?: string;
   hint?: string;
   onResult: (text: string, result: VoiceResult) => void;

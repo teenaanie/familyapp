@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
+import VoiceCommand from "@/components/VoiceCommand";
 import MonthNav, { thisMonth, type YearMonth } from "@/components/MonthNav";
 import { supabase } from "@/lib/supabase";
 import { loadStaffMonth, type Staff, type StaffMonth } from "@/lib/staffData";
@@ -59,6 +60,7 @@ export default function StaffAttendance() {
 
   return (
     <div className="flex flex-col gap-4 pb-16">
+      <VoiceCommand scope="staff" onSaved={reload} />
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
         <div className="md:w-80 md:shrink-0"><MonthNav value={ym} onChange={setYm} /></div>
       <p className="px-1 text-sm text-ink-soft">

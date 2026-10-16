@@ -6,6 +6,8 @@ import DecimalInput from "@/components/DecimalInput";
 import MicButton from "@/components/MicButton";
 import type { VoiceResult } from "@/lib/voice";
 import { supabase } from "@/lib/supabase";
+import { todayIST } from "@/lib/reminders";
+import { prettyDate } from "@/lib/reminderData";
 import { PRODUCE, findProduce, type Produce } from "@/lib/produce";
 import {
   billTotal,
@@ -73,6 +75,8 @@ export default function VegCalculator() {
   const [lines, setLines] = useState<VegLine[]>([]);
   const [rates, setRates] = useState<Record<string, SavedRate>>({});
   const [vendorSaid, setVendorSaid] = useState("");
+  const [billDate, setBillDate] = useState(todayIST);
+  const [shop, setShop] = useState("");
   const [tab, setTab] = useState<"vegetable" | "fruit">("vegetable");
   const [custom, setCustom] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -132,6 +136,8 @@ export default function VegCalculator() {
         household_id: householdId,
         total: billTotal(valid),
         vendor_asked: Number.isFinite(vendor) ? vendor : null,
+        bought_on: billDate,
+        vendor: shop.trim() || null,
       })
       .select("id")
       .single();
@@ -158,7 +164,9 @@ export default function VegCalculator() {
     }
     setLines([]);
     setVendorSaid("");
-    setSavedMsg(`Saved bill of ${formatRupees(billTotal(valid))}`);
+    setSavedMsg(`Saved ${formatRupees(billTotal(valid))} for ${billDate === todayIST() ? "today" : prettyDate(billDate)}`);
+    setBillDate(todayIST());
+    window.dispatchEvent(new Event("veg-bill-saved"));
     setTimeout(() => setSavedMsg(null), 3000);
   }
 
@@ -260,7 +268,7 @@ export default function VegCalculator() {
   const chips = PRODUCE.filter((p) => p.category === tab);
 
   return (
-    <div className="flex flex-col gap-5 pb-48 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-start lg:gap-8 lg:pb-12">
+    <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:items-start lg:gap-8 lg:pb-12">
       <div className="flex flex-col gap-4 lg:sticky lg:top-24">
       {/* Voice */}
       <section className="rounded-2xl bg-highlight-soft p-4 shadow-sm">
@@ -416,17 +424,29 @@ export default function VegCalculator() {
       )}
 
       {lines.length > 0 && (
-        <div className="flex items-center justify-center gap-6">
-          <button onClick={clearBill} className="text-sm text-ink-soft underline">
-            Clear bill
-          </button>
-          <button
-            onClick={saveBill}
-            disabled={saving || total === 0}
-            className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-50"
-          >
-            {saving ? "Saving…" : "Save bill"}
-          </button>
+        <div className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1 text-xs text-ink-soft">
+              Bought on
+              <input type="date" value={billDate} max={todayIST()} onChange={(e) => setBillDate(e.target.value || todayIST())} className="input" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-ink-soft">
+              Shop (optional)
+              <input value={shop} onChange={(e) => setShop(e.target.value)} placeholder="e.g. Market, Reliance" className="input" />
+            </label>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={saveBill}
+              disabled={saving || total === 0}
+              className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save bill"}
+            </button>
+            <button onClick={clearBill} className="text-sm text-ink-soft underline">
+              Clear without saving
+            </button>
+          </div>
         </div>
       )}
       {savedMsg && <p className="text-center text-sm font-medium text-good">{savedMsg}</p>}

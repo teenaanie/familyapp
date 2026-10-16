@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import MicButton from "./MicButton";
 import { useHousehold } from "./HouseholdProvider";
 import { supabase } from "@/lib/supabase";
@@ -28,24 +28,40 @@ interface Action {
 const STATUS_TEXT = { absent: "absent", half_day: "half day", extra: "extra day worked" } as const;
 const REMINDER_LEADS = { birthday: [1, 0], anniversary: [3, 0], bill: [3, 0], custom: [0] } as const;
 
-/** Home-screen voice: one sentence can mark leave, record payments, add reminders and veg items. */
-export default function VoiceCommand() {
+const COPY = {
+  any: {
+    label: "Tap and tell me",
+    hint: 'e.g. "Lakshmi didn\'t come today", "Paid Ravi 1500 by GPay", "Amma\'s birthday is 12 March"',
+  },
+  staff: {
+    label: "Tap and say who was on leave",
+    hint: 'e.g. "Lakshmi didn\'t come today", "Sunita half day yesterday", "Lakshmi came on Sunday"',
+  },
+  payments: {
+    label: "Tap and say what you paid",
+    hint: 'e.g. "Paid Ravi 1500 by GPay", "Gave Lakshmi 2000 advance in cash"',
+  },
+} as const;
+
+/**
+ * Voice panel: one sentence can mark leave, record payments, add reminders and veg items.
+ * On the staff and payments pages it focuses on that page's kind of entry.
+ */
+export default function VoiceCommand({ scope = "any", onSaved }: { scope?: "any" | "staff" | "payments"; onSaved?: () => void }) {
   const { householdId } = useHousehold();
-  const [staff, setStaff] = useState<Named[]>([]);
-  const [payees, setPayees] = useState<(Named & { staff_id: string | null })[]>([]);
   const [heard, setHeard] = useState<{ text: string; actions: Action[]; unclear: string | null } | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
 
-  useEffect(() => {
-    supabase.from("staff").select("id, name").eq("household_id", householdId).eq("active", true)
-      .then(({ data }) => setStaff(data ?? []));
-    supabase.from("payees").select("id, name, staff_id").eq("household_id", householdId).eq("active", true)
-      .then(({ data }) => setPayees(data ?? []));
-  }, [householdId]);
-
-  function onResult(text: string, r: VoiceResult) {
+  async function onResult(text: string, r: VoiceResult) {
+    // Fresh names each time, so someone added a moment ago is recognised.
+    const [{ data: staffRows }, { data: payeeRows }] = await Promise.all([
+      supabase.from("staff").select("id, name").eq("household_id", householdId).eq("active", true),
+      supabase.from("payees").select("id, name, staff_id").eq("household_id", householdId).eq("active", true),
+    ]);
+    const staff: Named[] = staffRows ?? [];
+    const payees: (Named & { staff_id: string | null })[] = payeeRows ?? [];
     const actions: Action[] = [];
 
     r.absences.forEach((a, i) => {
@@ -150,6 +166,7 @@ export default function VoiceCommand() {
       }
     }
     setBusy(false);
+    onSaved?.();
     const savedVeg = checked.has("veg");
     setHeard(null);
     setDone(failed.length ? `Some things didn't save: ${failed.join("; ")}` : savedVeg ? "Saved. Vegetables added to your bill." : "Saved.");
@@ -157,12 +174,7 @@ export default function VoiceCommand() {
 
   return (
     <section className="rounded-2xl bg-highlight-soft p-4 shadow-sm md:p-5">
-      <MicButton
-        mode="any"
-        label="Tap and tell me"
-        hint={'e.g. "Lakshmi didn\'t come today", "Paid Ravi 1500 by GPay", "Amma\'s birthday is 12 March"'}
-        onResult={onResult}
-      />
+      <MicButton mode={scope} label={COPY[scope].label} hint={COPY[scope].hint} onResult={onResult} />
 
       {heard && (
         <div className="mt-4 rounded-xl bg-surface p-4">

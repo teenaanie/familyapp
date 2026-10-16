@@ -48,7 +48,7 @@ export const VoiceResult = z.object({
 });
 export type VoiceResult = z.infer<typeof VoiceResult>;
 
-export type VoiceMode = "veg" | "any";
+export type VoiceMode = "veg" | "staff" | "payments" | "any";
 
 export interface VoiceContext {
   mode: VoiceMode;
@@ -84,13 +84,20 @@ export async function transcribe(audio: Blob, filename: string, ctx: VoiceContex
   return res.text.trim();
 }
 
+const MODE_FOCUS: Record<VoiceMode, string> = {
+  veg: "They are at a vegetable/fruit vendor: put everything into veg_items and leave the other lists empty.",
+  staff: "They are on the staff attendance page: they are almost certainly marking leave, half days or extra days, so use absences (other lists only if clearly said).",
+  payments: "They are on the monthly payments page: they are almost certainly recording money paid, so use payments (other lists only if clearly said).",
+  any: "Work out which lists each part belongs to. Anything about buying produce goes in veg_items.",
+};
+
 function systemPrompt(ctx: VoiceContext) {
   const weekday = new Date(ctx.today + "T00:00").toLocaleDateString("en-IN", { weekday: "long" });
   return `You turn what a person in Kerala, India said into structured data for their family app. Speech is English, often mixed with Hindi or Malayalam (Manglish/Hinglish), and may contain transcription mistakes — use common sense.
 
 Today is ${weekday}, ${ctx.today}.
 
-${ctx.mode === "veg" ? "They are at a vegetable/fruit vendor: put everything into veg_items and leave the other lists empty." : "Work out which lists each part belongs to. Anything about buying produce goes in veg_items."}
+${MODE_FOCUS[ctx.mode]}
 
 VEG ITEMS — extract, never calculate prices:
 - Catalogue (name, then what people call it): ${catalogue}. Use the catalogue name when it matches.
