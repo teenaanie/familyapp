@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import PushSetup from "@/components/PushSetup";
 import VoiceCommand from "@/components/VoiceCommand";
@@ -28,6 +28,22 @@ export default function Reminders() {
   const [rows, setRows] = useState<ReminderView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Reminder | "new" | null>(null);
+  const [query, setQuery] = useState("");
+  // Sort choice is remembered on this device.
+  const [sort, setSort] = useState<"date" | "name">(() => {
+    try {
+      return localStorage.getItem("reminders.sort") === "name" ? "name" : "date";
+    } catch {
+      return "date";
+    }
+  });
+
+  function chooseSort(s: "date" | "name") {
+    setSort(s);
+    try {
+      localStorage.setItem("reminders.sort", s);
+    } catch {}
+  }
 
   const reload = useCallback(() => {
     loadReminders(householdId).then(setRows).catch((e) => setError(e.message));
@@ -41,9 +57,12 @@ export default function Reminders() {
     reload();
   }
 
-  const overdue = rows?.filter((r) => r.status.overdue) ?? [];
-  const soon = rows?.filter((r) => !r.status.overdue && (r.status.daysUntil ?? 99) <= 7) ?? [];
-  const later = rows?.filter((r) => !r.status.overdue && (r.status.daysUntil ?? 99) > 7) ?? [];
+  const q = query.trim().toLowerCase();
+  const shown = (rows ?? []).filter((r) => !q || r.title.toLowerCase().includes(q));
+  const overdue = shown.filter((r) => r.status.overdue);
+  const soon = shown.filter((r) => !r.status.overdue && (r.status.daysUntil ?? 99) <= 7);
+  const later = shown.filter((r) => !r.status.overdue && (r.status.daysUntil ?? 99) > 7);
+  const byName = [...shown].sort((a, b) => a.title.localeCompare(b.title, "en", { sensitivity: "base" }));
 
   const form = editing && (
     <ReminderForm
@@ -66,9 +85,53 @@ export default function Reminders() {
             No reminders yet. Add birthdays, anniversaries and bills — you&apos;ll get a notification on the morning they&apos;re due.
           </p>
         )}
-        <Group title="Needs attention" items={overdue} tone="bad" onDone={markDone} onEdit={setEditing} />
-        <Group title="This week" items={soon} onDone={markDone} onEdit={setEditing} />
-        <Group title="Coming up" items={later} onDone={markDone} onEdit={setEditing} />
+        {rows && rows.length > 0 && (
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search reminders by name"
+                aria-label="Search reminders by name"
+                className="input w-full pl-10"
+              />
+              <svg viewBox="0 0 24 24" className="pointer-events-none absolute top-1/2 left-3 h-5 w-5 -translate-y-1/2 text-ink-soft" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-ink-soft">Sort by</span>
+              <div className="flex rounded-xl bg-muted p-1" role="group" aria-label="Sort reminders">
+                {(["date", "name"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => chooseSort(s)}
+                    aria-pressed={sort === s}
+                    className={`rounded-lg px-3 py-1.5 font-medium ${sort === s ? "bg-surface text-ink shadow-sm" : "text-ink-soft"}`}
+                  >
+                    {s === "date" ? "Reminder date" : "Name A–Z"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {q && (
+          <p className="-mt-3 text-sm text-ink-soft">
+            {shown.length ? `${shown.length} of ${rows?.length} reminders match “${query.trim()}”` : `No reminders match “${query.trim()}”.`}
+          </p>
+        )}
+        {sort === "date" ? (
+          <>
+            <Group title="Needs attention" items={overdue} tone="bad" onDone={markDone} onEdit={setEditing} />
+            <Group title="This week" items={soon} onDone={markDone} onEdit={setEditing} />
+            <Group title="Coming up" items={later} onDone={markDone} onEdit={setEditing} />
+          </>
+        ) : (
+          <Group title="All reminders, A–Z" items={byName} onDone={markDone} onEdit={setEditing} />
+        )}
         {/* On phones the form opens inline below the list. */}
         <div className="lg:hidden">
           {form ?? (
@@ -163,6 +226,13 @@ function ReminderForm({ reminder, onDone }: { reminder: Reminder | null; onDone:
   const [shared, setShared] = useState(reminder?.shared ?? true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  // On phones the form sits below the list; bring it into view when it opens.
+  useEffect(() => {
+    const el = formRef.current;
+    if (el && el.offsetParent !== null) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
 
   function pickKind(k: (typeof KINDS)[number]) {
     setKind(k.value);
@@ -200,8 +270,8 @@ function ReminderForm({ reminder, onDone }: { reminder: Reminder | null; onDone:
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm">
-      <h2 className="text-lg font-semibold">{reminder ? "Edit reminder" : "New reminder"}</h2>
+    <form ref={formRef} onSubmit={submit} className="flex flex-col gap-3 rounded-2xl bg-surface p-4 shadow-sm ring-2 ring-accent/30">
+      <h2 className="text-lg font-semibold">{reminder ? `Edit “${reminder.title}”` : "New reminder"}</h2>
       <div className="flex flex-wrap gap-1.5">
         {KINDS.map((k) => (
           <button
