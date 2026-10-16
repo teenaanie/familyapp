@@ -16,8 +16,28 @@ interface Named {
   name: string;
 }
 
+type ActionKind = "absence" | "payment" | "new_payee" | "new_staff" | "reminder" | "veg";
+
+/** What each page's mic is allowed to save. */
+const ALLOWED: Record<Scope, ActionKind[]> = {
+  any: ["absence", "payment", "new_payee", "new_staff", "reminder", "veg"],
+  staff: ["absence", "new_staff"],
+  payments: ["payment", "new_payee", "new_staff"],
+  reminders: ["reminder"],
+};
+
+type Scope = "any" | "staff" | "payments" | "reminders";
+
+const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function ordinal(n: number) {
+  if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
+  return `${n}${{ 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th"}`;
+}
+
 interface Action {
   key: string;
+  kind: ActionKind;
   icon: string;
   text: string;
   /** Why it can't be saved (e.g. unknown name); shown instead of a checkbox. */
@@ -38,8 +58,12 @@ const COPY = {
     hint: 'e.g. "Lakshmi didn\'t come today", "Sunita half day yesterday", "Lakshmi came on Sunday"',
   },
   payments: {
-    label: "Tap and say what you paid",
-    hint: 'e.g. "Paid Ravi 1500 by GPay", "Gave Lakshmi 2000 advance in cash"',
+    label: "Tap and say what you paid, or who you pay",
+    hint: 'e.g. "Paid Ravi 1500 by GPay", "Kickboxing sir 2500 every month on the 5th"',
+  },
+  reminders: {
+    label: "Tap and say what to remind you about",
+    hint: 'e.g. "Amma\'s birthday is 12 March", "KSEB bill on the 5th every month"',
   },
 } as const;
 
@@ -47,7 +71,7 @@ const COPY = {
  * Voice panel: one sentence can mark leave, record payments, add reminders and veg items.
  * On the staff and payments pages it focuses on that page's kind of entry.
  */
-export default function VoiceCommand({ scope = "any", onSaved }: { scope?: "any" | "staff" | "payments"; onSaved?: () => void }) {
+export default function VoiceCommand({ scope = "any", onSaved }: { scope?: Scope; onSaved?: () => void }) {
   const { householdId } = useHousehold();
   const [heard, setHeard] = useState<{ text: string; actions: Action[]; unclear: string | null } | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -68,6 +92,7 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: "any"
       const who = matchName(a.staff_name, staff, (s) => s.name);
       actions.push({
         key: `abs${i}`,
+        kind: "absence",
         icon: "🧹",
         text: `${who?.name ?? a.staff_name} — ${STATUS_TEXT[a.status]} on ${prettyDate(a.date)}`,
         problem: who ? undefined : `No staff called "${a.staff_name}"`,
@@ -88,6 +113,7 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: "any"
         })();
       actions.push({
         key: `pay${i}`,
+        kind: "payment",
         icon: "💸",
         text: `Paid ${payee?.name ?? p.payee_name} ${formatRupees(p.amount)}${p.mode ? ` by ${p.mode.toUpperCase()}` : ""}${p.is_advance ? " (advance)" : ""} on ${prettyDate(p.date)}`,
         problem: payee ? undefined : `No payee called "${p.payee_name}" — add them under Monthly payments`,
@@ -106,9 +132,51 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: "any"
       });
     });
 
+    r.new_staff.forEach((n, i) => {
+      const exists = matchName(n.name, staff, (x) => x.name);
+      const days = n.work_days?.length ? [...n.work_days].sort() : [1, 2, 3, 4, 5, 6];
+      const leaves = n.paid_leaves ?? 2;
+      actions.push({
+        key: `staff${i}`,
+        kind: "new_staff",
+        icon: "🧹",
+        text: `Add staff: ${n.name}${n.role ? ` (${n.role})` : ""}, ${n.monthly_salary !== null ? `${formatRupees(n.monthly_salary)}/month` : "salary not said"} · ${days.map((d) => DAY_SHORT[d]).join(" ")} · ${leaves} paid leave${leaves === 1 ? "" : "s"}`,
+        problem: exists ? `${exists.name} is already on your staff list` : undefined,
+        run: async () => {
+          const { data, error } = await supabase
+            .from("staff")
+            .insert({ household_id: householdId, name: n.name, role: n.role, monthly_salary: n.monthly_salary ?? 0, work_days: days, paid_leaves_per_month: leaves })
+            .select("id")
+            .single();
+          if (error) throw error;
+          // Same as adding staff by hand: they also appear in Monthly payments, salary from attendance.
+          await supabase.from("payees").insert({ household_id: householdId, name: n.name, category: n.role ?? "Staff", staff_id: data.id });
+        },
+      });
+    });
+
+    r.new_payees.forEach((n, i) => {
+      const exists = matchName(n.name, payees, (x) => x.name);
+      const day = n.due_day && n.due_day >= 1 && n.due_day <= 31 ? Math.round(n.due_day) : null;
+      actions.push({
+        key: `payee${i}`,
+        kind: "new_payee",
+        icon: "🗓️",
+        text: `Pay monthly: ${n.name}${n.amount !== null ? ` · ${formatRupees(n.amount)}` : ""}${day ? ` · due on the ${ordinal(day)}` : ""}`,
+        problem: exists ? `"${exists.name}" is already in Monthly payments` : undefined,
+        run: async () => {
+          const { error } = await supabase
+            .from("payees")
+            .insert({ household_id: householdId, name: n.name, category: n.category, expected_amount: n.amount, due_day: day });
+          if (error) throw error;
+        },
+      });
+    });
+
     r.reminders.forEach((m, i) => {
       actions.push({
         key: `rem${i}`,
+        kind: "reminder",
         icon: { birthday: "🎂", anniversary: "💍", bill: "🧾", custom: "📌" }[m.kind],
         text: `Reminder: ${m.title} — ${prettyDate(m.date)}${m.recurrence === "yearly" ? ", every year" : m.recurrence === "monthly" ? ", every month" : m.recurrence === "every_n_days" ? `, every ${m.every_n_days} days` : ""}`,
         run: async () => {
@@ -138,6 +206,7 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: "any"
       }));
       actions.push({
         key: "veg",
+        kind: "veg",
         icon: "🥕",
         text: `Add to vegetable bill: ${lines.map((l) => `${l.name}${Number.isFinite(l.rate) ? ` (${rateLabel(l.rate, l.rateQty, l.rateUnit)})` : ""}`).join(", ")}`,
         run: async () => {
@@ -148,8 +217,9 @@ export default function VoiceCommand({ scope = "any", onSaved }: { scope?: "any"
       });
     }
 
-    setHeard({ text, actions, unclear: r.unclear });
-    setChecked(new Set(actions.filter((a) => !a.problem).map((a) => a.key)));
+    const allowed = actions.filter((a) => ALLOWED[scope].includes(a.kind));
+    setHeard({ text, actions: allowed, unclear: r.unclear });
+    setChecked(new Set(allowed.filter((a) => !a.problem).map((a) => a.key)));
     setDone(null);
   }
 

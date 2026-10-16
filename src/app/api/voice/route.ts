@@ -21,7 +21,7 @@ export async function POST(request: Request) {
 
   const form = await request.formData();
   const requested = form.get("mode");
-  const mode: VoiceMode = requested === "veg" || requested === "staff" || requested === "payments" ? requested : "any";
+  const mode: VoiceMode = requested === "veg" || requested === "staff" || requested === "payments" || requested === "reminders" ? requested : "any";
   const audio = form.get("audio");
   const typed = form.get("text");
 

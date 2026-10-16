@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import PushSetup from "@/components/PushSetup";
+import VoiceCommand from "@/components/VoiceCommand";
 import { Field } from "@/app/staff/StaffAttendance";
 import { supabase } from "@/lib/supabase";
 import { KIND_EMOJI, loadReminders, prettyDate, repeatLabel, type Reminder, type ReminderView } from "@/lib/reminderData";
@@ -57,6 +58,7 @@ export default function Reminders() {
   return (
     <div className="grid items-start gap-6 pb-16 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <div className="flex flex-col gap-6">
+        <VoiceCommand scope="reminders" onSaved={reload} />
         {error && <p className="text-sm text-bad">{error}</p>}
         {rows === null && <p className="text-ink-soft">Loading…</p>}
         {rows?.length === 0 && (

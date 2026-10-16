@@ -35,6 +35,23 @@ export const VoiceResult = z.object({
       is_advance: z.boolean(),
     }),
   ),
+  new_payees: z.array(
+    z.object({
+      name: z.string().describe("Who or what is paid, e.g. 'Kickboxing sir', 'Blind school donation'"),
+      category: z.string().nullable().describe("Short type, e.g. Donation, Classes, Gardener, Newspaper"),
+      amount: z.number().nullable().describe("Usual monthly amount in rupees, null if not said"),
+      due_day: z.number().nullable().describe("Day of month it's paid (1–31), null if not said"),
+    }),
+  ),
+  new_staff: z.array(
+    z.object({
+      name: z.string().describe("Person's name only, e.g. 'Anita'"),
+      role: z.string().nullable().describe("Maid, Cook, Cleaner, Driver, Gardener…"),
+      monthly_salary: z.number().nullable(),
+      work_days: z.array(z.number()).nullable().describe("0=Sunday … 6=Saturday; null if not said"),
+      paid_leaves: z.number().nullable(),
+    }),
+  ),
   reminders: z.array(
     z.object({
       title: z.string(),
@@ -48,7 +65,7 @@ export const VoiceResult = z.object({
 });
 export type VoiceResult = z.infer<typeof VoiceResult>;
 
-export type VoiceMode = "veg" | "staff" | "payments" | "any";
+export type VoiceMode = "veg" | "staff" | "payments" | "reminders" | "any";
 
 export interface VoiceContext {
   mode: VoiceMode;
@@ -86,8 +103,9 @@ export async function transcribe(audio: Blob, filename: string, ctx: VoiceContex
 
 const MODE_FOCUS: Record<VoiceMode, string> = {
   veg: "They are at a vegetable/fruit vendor: put everything into veg_items and leave the other lists empty.",
-  staff: "They are on the staff attendance page: they are almost certainly marking leave, half days or extra days, so use absences (other lists only if clearly said).",
-  payments: "They are on the monthly payments page: they are almost certainly recording money paid, so use payments (other lists only if clearly said).",
+  staff: "They are on the staff attendance page: use absences for leave / half days / extra days, and new_staff when they describe a new person who works in the house. Never reminders.",
+  payments: "They are on the monthly payments page: use payments for money already handed over, new_payees for someone/something they pay regularly, and new_staff for a person who works in the house on a schedule. Never reminders.",
+  reminders: "They are on the reminders page: put everything in reminders.",
   any: "Work out which lists each part belongs to. Anything about buying produce goes in veg_items.",
 };
 
@@ -110,6 +128,11 @@ VEG ITEMS — extract, never calculate prices:
 STAFF ATTENDANCE (absences): household staff are: ${ctx.staffNames.join(", ") || "none yet"}. Match names loosely to these. "didn't come", "on leave", "absent" → absent; "came only half day" → half_day; "came on Sunday / extra day" → extra. Resolve "today", "yesterday", weekday names to dates (the most recent past one).
 
 PAYMENTS: people/things they pay monthly: ${ctx.payeeNames.join(", ") || "none yet"}. "Paid the gardener 1500 by GPay" → payee_name gardener's name from that list if it matches, amount 1500, mode upi (GPay/PhonePe/Paytm = upi), is_advance true only if they say advance.
+
+SETTING UP REGULAR PAYMENTS — describing who they pay each month is NOT a payment and NOT a reminder:
+- "Cook Anita monthly salary 9000 on the 1st" / "Shanta cleaning maid, 6000" → new_staff (people who come to work in the house: maid, cook, cleaner, driver, nanny, daily gardener). Name is just the person's name; role from the words around it.
+- "Kickboxing sir 2500 every month on the 5th", "Blind school donation 1000", "Old age home donation", "Kamla chachi from REC" → new_payees, name kept as they'd recognise it, without words like "monthly payment".
+- Only "paid / gave / transferred / sent" means money already handed over → payments.
 
 REMINDERS: birthdays and anniversaries repeat yearly; bills usually monthly; otherwise none. Use a future date unless it's a birth date.
 
