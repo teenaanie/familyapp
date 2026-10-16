@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import VoiceCommand from "@/components/VoiceCommand";
+import ListControls, { MatchCount, useRememberedSort } from "@/components/ListControls";
 import MonthNav, { thisMonth, type YearMonth } from "@/components/MonthNav";
 import { Field } from "@/app/staff/StaffAttendance";
 import { supabase } from "@/lib/supabase";
@@ -53,6 +54,8 @@ export default function MonthlyPayments() {
   const [error, setError] = useState<string | null>(null);
   const [paying, setPaying] = useState<string | null>(null);
   const [editing, setEditing] = useState<Payee | "new" | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, chooseSort] = useRememberedSort("payments.sort", ["due", "name", "pending"] as const, "due");
 
   const reload = useCallback(async () => {
     try {
@@ -113,6 +116,15 @@ export default function MonthlyPayments() {
     (t, r) => ({ expected: t.expected + (r.expected ?? r.paid), paid: t.paid + r.paid }),
     { expected: 0, paid: 0 },
   );
+  const q = query.trim().toLowerCase();
+  const shownRows = (rows ?? [])
+    .filter((r) => !q || [r.payee.name, r.payee.category, r.payee.note].some((t) => t?.toLowerCase().includes(q)))
+    .sort((a, b) => {
+      if (sort === "name") return byName(a, b);
+      if (sort === "pending") return statusRank(a) - statusRank(b) || byDue(a, b);
+      return byDue(a, b);
+    });
+
   const pendingCount = (rows ?? []).filter((r) => r.expected !== null && r.paid < r.expected).length;
 
   return (
@@ -137,8 +149,26 @@ export default function MonthlyPayments() {
         </p>
       )}
 
+      {rows && rows.length > 0 && (
+        <>
+          <ListControls
+            query={query}
+            onQuery={setQuery}
+            placeholder="Search by name, type or note"
+            sort={sort}
+            onSort={chooseSort}
+            options={[
+              { value: "due", label: "Due date" },
+              { value: "name", label: "Name A–Z" },
+              { value: "pending", label: "Pending first" },
+            ]}
+          />
+          <MatchCount query={query} shown={shownRows.length} total={rows.length} noun="payees" />
+        </>
+      )}
+
       <ul className="grid items-start gap-3 lg:grid-cols-2">
-        {rows?.map((r) => {
+        {shownRows.map((r) => {
           if (editing !== "new" && editing?.id === r.payee.id) {
             return (
               <li key={r.payee.id}>
@@ -275,6 +305,22 @@ export default function MonthlyPayments() {
       )}
     </div>
   );
+}
+
+const byName = (a: Row, b: Row) => a.payee.name.localeCompare(b.payee.name, "en", { sensitivity: "base" });
+
+/** Monthly payees by due day; weekly or undated ones after, then by name. */
+const byDue = (a: Row, b: Row) => {
+  const day = (r: Row) => (r.payee.frequency === "monthly" && r.payee.due_day ? r.payee.due_day : 99);
+  return day(a) - day(b) || byName(a, b);
+};
+
+/** Unpaid first, then part-paid, then weekly (no fixed amount), then fully paid. */
+function statusRank(r: Row) {
+  if (r.payee.frequency === "weekly") return 2;
+  const done = r.expected !== null ? r.paid >= r.expected : r.paid > 0;
+  if (done) return 3;
+  return r.paid > 0 ? 1 : 0;
 }
 
 function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {

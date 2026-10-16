@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import PushSetup from "@/components/PushSetup";
 import VoiceCommand from "@/components/VoiceCommand";
+import ListControls, { MatchCount, useRememberedSort } from "@/components/ListControls";
 import { Field } from "@/app/staff/StaffAttendance";
 import { supabase } from "@/lib/supabase";
 import { KIND_EMOJI, loadReminders, prettyDate, repeatLabel, type Reminder, type ReminderView } from "@/lib/reminderData";
@@ -29,21 +30,7 @@ export default function Reminders() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Reminder | "new" | null>(null);
   const [query, setQuery] = useState("");
-  // Sort choice is remembered on this device.
-  const [sort, setSort] = useState<"date" | "name">(() => {
-    try {
-      return localStorage.getItem("reminders.sort") === "name" ? "name" : "date";
-    } catch {
-      return "date";
-    }
-  });
-
-  function chooseSort(s: "date" | "name") {
-    setSort(s);
-    try {
-      localStorage.setItem("reminders.sort", s);
-    } catch {}
-  }
+  const [sort, chooseSort] = useRememberedSort("reminders.sort", ["date", "name"] as const, "date");
 
   const reload = useCallback(() => {
     loadReminders(householdId).then(setRows).catch((e) => setError(e.message));
@@ -86,43 +73,19 @@ export default function Reminders() {
           </p>
         )}
         {rows && rows.length > 0 && (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <div className="relative flex-1">
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search reminders by name"
-                aria-label="Search reminders by name"
-                className="input w-full pl-10"
-              />
-              <svg viewBox="0 0 24 24" className="pointer-events-none absolute top-1/2 left-3 h-5 w-5 -translate-y-1/2 text-ink-soft" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                <circle cx="11" cy="11" r="7" />
-                <path d="m20 20-3.5-3.5" />
-              </svg>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-ink-soft">Sort by</span>
-              <div className="flex rounded-xl bg-muted p-1" role="group" aria-label="Sort reminders">
-                {(["date", "name"] as const).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => chooseSort(s)}
-                    aria-pressed={sort === s}
-                    className={`rounded-lg px-3 py-1.5 font-medium ${sort === s ? "bg-surface text-ink shadow-sm" : "text-ink-soft"}`}
-                  >
-                    {s === "date" ? "Reminder date" : "Name A–Z"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <ListControls
+            query={query}
+            onQuery={setQuery}
+            placeholder="Search reminders by name"
+            sort={sort}
+            onSort={chooseSort}
+            options={[
+              { value: "date", label: "Reminder date" },
+              { value: "name", label: "Name A–Z" },
+            ]}
+          />
         )}
-        {q && (
-          <p className="-mt-3 text-sm text-ink-soft">
-            {shown.length ? `${shown.length} of ${rows?.length} reminders match “${query.trim()}”` : `No reminders match “${query.trim()}”.`}
-          </p>
-        )}
+        <MatchCount query={query} shown={shown.length} total={rows?.length ?? 0} noun="reminders" />
         {sort === "date" ? (
           <>
             <Group title="Needs attention" items={overdue} tone="bad" onDone={markDone} onEdit={setEditing} />
