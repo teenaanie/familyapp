@@ -77,6 +77,8 @@ export async function transcribe(audio: Blob, filename: string, ctx: VoiceContex
   const res = await openai.audio.transcriptions.create({
     file: await toFile(audio, filename),
     model: "gpt-4o-mini-transcribe",
+    // Force English letters: auto-detection sometimes picked Urdu and heard "ten" as "teen" (three).
+    language: "en",
     prompt: transcriptionHint(ctx),
   });
   return res.text.trim();
