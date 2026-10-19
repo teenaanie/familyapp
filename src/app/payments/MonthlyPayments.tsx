@@ -27,6 +27,7 @@ interface Payee {
 interface Payment {
   id: string;
   payee_id: string;
+  for_month: string;
   amount: number;
   paid_on: string;
   mode: string | null;
@@ -54,6 +55,7 @@ export default function MonthlyPayments() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [paying, setPaying] = useState<string | null>(null);
+  const [editingPayment, setEditingPayment] = useState<string | null>(null);
   const [editing, setEditing] = useState<Payee | "new" | null>(null);
   const [query, setQuery] = useState("");
   const [sort, chooseSort] = useRememberedSort("payments.sort", ["due", "name", "pending"] as const, "due");
@@ -90,7 +92,7 @@ export default function MonthlyPayments() {
           .order("name"),
         supabase
           .from("payments")
-          .select("id, payee_id, amount, paid_on, mode, is_advance, note")
+          .select("id, payee_id, for_month, amount, paid_on, mode, is_advance, note")
           .eq("household_id", householdId)
           .eq("for_month", monthKey(ym.year, ym.month))
           .order("paid_on"),
@@ -263,20 +265,45 @@ export default function MonthlyPayments() {
 
               {r.payments.length > 0 && (
                 <ul className="mt-3 flex flex-col gap-1 border-t border-line pt-2 text-sm">
-                  {r.payments.map((p) => (
-                    <li key={p.id} className="flex items-center gap-2">
-                      <span className="tabular-nums">{formatRupees(p.amount)}</span>
-                      <span className="text-ink-soft">
-                        {shortDate(p.paid_on)}
-                        {p.mode ? ` · ${p.mode.toUpperCase()}` : ""}
-                        {p.is_advance ? " · advance" : ""}
-                        {p.note ? ` · ${p.note}` : ""}
-                      </span>
-                      <button onClick={() => undo(p)} className="ml-auto text-xs text-ink-soft underline">
-                        Delete
-                      </button>
-                    </li>
-                  ))}
+                  {r.payments.map((p) =>
+                    editingPayment === p.id ? (
+                      <li key={p.id}>
+                        <PayForm
+                          row={r}
+                          payment={p}
+                          forMonth={p.for_month}
+                          onDone={() => {
+                            setEditingPayment(null);
+                            reload();
+                          }}
+                        />
+                      </li>
+                    ) : (
+                      <li key={p.id} className="flex items-center gap-2">
+                        <span className="tabular-nums">{formatRupees(p.amount)}</span>
+                        <span className="min-w-0 text-ink-soft">
+                          {shortDate(p.paid_on)}
+                          {p.mode ? ` · ${p.mode.toUpperCase()}` : ""}
+                          {p.is_advance ? " · advance" : ""}
+                          {p.note ? ` · ${p.note}` : ""}
+                        </span>
+                        <span className="ml-auto flex shrink-0 gap-3">
+                          <button
+                            onClick={() => {
+                              setPaying(null);
+                              setEditingPayment(p.id);
+                            }}
+                            className="text-xs font-medium text-accent underline"
+                          >
+                            Edit
+                          </button>
+                          <button onClick={() => undo(p)} className="text-xs text-ink-soft underline">
+                            Delete
+                          </button>
+                        </span>
+                      </li>
+                    ),
+                  )}
                 </ul>
               )}
 
@@ -293,12 +320,12 @@ export default function MonthlyPayments() {
               ) : (
                 <div className="mt-3 flex items-center gap-4">
                   {!done && (
-                    <button onClick={() => setPaying(r.payee.id)} className="rounded-xl bg-accent px-4 py-2 font-semibold text-white">
+                    <button onClick={() => { setEditingPayment(null); setPaying(r.payee.id); }} className="rounded-xl bg-accent px-4 py-2 font-semibold text-white">
                       Record payment
                     </button>
                   )}
                   {done && (
-                    <button onClick={() => setPaying(r.payee.id)} className="text-sm text-ink-soft underline">
+                    <button onClick={() => { setEditingPayment(null); setPaying(r.payee.id); }} className="text-sm text-ink-soft underline">
                       Add another payment
                     </button>
                   )}
@@ -364,50 +391,61 @@ function Stat({ label, value, highlight }: { label: string; value: string; highl
 
 function PayForm({
   row,
+  payment,
   forMonth,
   defaultAmount,
   onDone,
 }: {
   row: Row;
+  /** Given when editing an existing payment. */
+  payment?: Payment;
   forMonth: string;
   defaultAmount?: number;
   onDone: () => void;
 }) {
   const { householdId } = useHousehold();
-  const [amount, setAmount] = useState(defaultAmount ? String(defaultAmount) : "");
-  const [paidOn, setPaidOn] = useState(() => new Date().toLocaleDateString("en-CA"));
-  const [mode, setMode] = useState<(typeof MODES)[number]>("upi");
-  const [advance, setAdvance] = useState(false);
-  const [note, setNote] = useState("");
+  const [amount, setAmount] = useState(payment ? String(payment.amount) : defaultAmount ? String(defaultAmount) : "");
+  const [paidOn, setPaidOn] = useState(() => payment?.paid_on ?? new Date().toLocaleDateString("en-CA"));
+  // Which month's payment this is — e.g. September's salary paid on 2 October.
+  const [month, setMonth] = useState(forMonth.slice(0, 7));
+  const [mode, setMode] = useState<(typeof MODES)[number]>((payment?.mode as (typeof MODES)[number]) ?? "upi");
+  const [advance, setAdvance] = useState(payment?.is_advance ?? false);
+  const [note, setNote] = useState(payment?.note ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!(Number(amount) > 0)) return setError("Enter the amount");
     setBusy(true);
-    const { error } = await supabase.from("payments").insert({
-      household_id: householdId,
-      payee_id: row.payee.id,
-      for_month: forMonth,
+    const fields = {
+      for_month: `${month || forMonth.slice(0, 7)}-01`,
       amount: Number(amount),
       paid_on: paidOn,
       mode,
       is_advance: advance,
       note: note.trim() || null,
-    });
+    };
+    const { error } = payment
+      ? await supabase.from("payments").update(fields).eq("id", payment.id)
+      : await supabase.from("payments").insert({ ...fields, household_id: householdId, payee_id: row.payee.id });
     setBusy(false);
     if (error) setError(error.message);
     else onDone();
   }
 
   return (
-    <form onSubmit={submit} className="mt-3 flex flex-col gap-3 border-t border-line pt-3">
+    <form onSubmit={submit} className={`flex flex-col gap-3 ${payment ? "my-2 rounded-xl bg-muted/60 p-3" : "mt-3 border-t border-line pt-3"}`}>
+      {payment && <p className="text-sm font-semibold">Edit payment</p>}
       <div className="grid grid-cols-2 gap-3">
         <Field label="Amount (₹)">
           <input required inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className="input" />
         </Field>
         <Field label="Paid on">
           <input type="date" value={paidOn} onChange={(e) => setPaidOn(e.target.value)} className="input" />
+        </Field>
+        <Field label="Counts for month">
+          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="input" />
         </Field>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -432,7 +470,7 @@ function PayForm({
       {error && <p className="text-sm text-bad">{error}</p>}
       <div className="flex items-center gap-3">
         <button disabled={busy} className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-50">
-          {busy ? "Saving…" : "Save payment"}
+          {busy ? "Saving…" : payment ? "Save changes" : "Save payment"}
         </button>
         <button type="button" onClick={onDone} className="text-sm text-ink-soft underline">Cancel</button>
       </div>
