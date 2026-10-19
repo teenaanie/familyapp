@@ -8,6 +8,7 @@ import type { VoiceResult } from "@/lib/voice";
 import { supabase } from "@/lib/supabase";
 import { todayIST } from "@/lib/reminders";
 import { prettyDate } from "@/lib/reminderData";
+import { BILL_SAVED_EVENT, EDIT_BILL_EVENT, type SavedBill } from "@/lib/vegBills";
 import { PRODUCE, findProduce, type Produce } from "@/lib/produce";
 import {
   billTotal,
@@ -21,6 +22,8 @@ import {
 // Until Supabase is wired up, the open bill and remembered rates live on this device.
 const BILL_KEY = "veg.bill";
 const RATES_KEY = "veg.rates";
+const EDITING_KEY = "veg.editing";
+const STASH_KEY = "veg.stash";
 
 type SavedRate = Pick<VegLine, "rate" | "rateQty" | "rateUnit">;
 
@@ -80,6 +83,9 @@ export default function VegCalculator() {
   const [tab, setTab] = useState<"vegetable" | "fruit">("vegetable");
   const [custom, setCustom] = useState("");
   const [loaded, setLoaded] = useState(false);
+  /** A saved bill opened for editing; saving then updates it instead of adding a new one. */
+  const [editing, setEditing] = useState<{ id: string; bought_on: string } | null>(null);
+  const [heard, setHeard] = useState<{ text: string; added: string[] } | null>(null);
 
   // localStorage only exists in the browser, so restore after mount to avoid a hydration mismatch.
   // NaN is saved as null, hence the `?? NaN`.
@@ -87,8 +93,61 @@ export default function VegCalculator() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLines(load<VegLine[]>(BILL_KEY, []).map((l) => ({ ...l, rate: l.rate ?? NaN, qty: l.qty ?? NaN })));
     setRates(load(RATES_KEY, {}));
+    setEditing(load(EDITING_KEY, null));
     setLoaded(true);
   }, []);
+
+  useEffect(() => {
+    if (loaded) save(EDITING_KEY, editing);
+  }, [editing, loaded]);
+
+  // "Edit" on a past bill loads it here. A bill already in progress is set aside and
+  // comes back when the edit is saved or cancelled.
+  useEffect(() => {
+    const onEdit = (e: Event) => {
+      const bill = (e as CustomEvent<SavedBill>).detail;
+      if (lines.length && !editing) {
+        if (!confirm(`Your open bill has ${lines.length} item${lines.length === 1 ? "" : "s"}. Set it aside while you edit this one? It comes back afterwards.`)) return;
+        save(STASH_KEY, { lines, vendorSaid, shop });
+      }
+      setLines(
+        bill.veg_items.map((i) => ({
+          id: newId(),
+          name: i.name,
+          rate: i.rate,
+          rateQty: i.rate_qty,
+          rateUnit: i.rate_unit,
+          qty: i.qty,
+          qtyUnit: i.qty_unit,
+        })),
+      );
+      setBillDate(bill.bought_on);
+      setShop(bill.vendor ?? "");
+      setVendorSaid(bill.vendor_asked === null ? "" : String(bill.vendor_asked));
+      setEditing({ id: bill.id, bought_on: bill.bought_on });
+      setHeard(null);
+      setSavedMsg(null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    window.addEventListener(EDIT_BILL_EVENT, onEdit);
+    return () => window.removeEventListener(EDIT_BILL_EVENT, onEdit);
+  }, [lines, editing, vendorSaid, shop]);
+
+  /** Leave edit mode, bringing back any bill that was set aside. */
+  function finishEditing() {
+    const stash = load<{ lines: VegLine[]; vendorSaid: string; shop: string } | null>(STASH_KEY, null);
+    setLines(stash ? stash.lines.map((l) => ({ ...l, rate: l.rate ?? NaN, qty: l.qty ?? NaN })) : []);
+    setVendorSaid(stash?.vendorSaid ?? "");
+    setShop(stash?.shop ?? "");
+    setBillDate(todayIST());
+    setEditing(null);
+    save(STASH_KEY, null);
+  }
+
+  function cancelEditing() {
+    if (!confirm("Discard your changes to this bill?")) return;
+    finishEditing();
+  }
 
   // Shared rates from the household override this device's copy.
   useEffect(() => {
@@ -130,18 +189,18 @@ export default function VegCalculator() {
     const valid = lines.filter((l) => linePrice(l).ok && Number.isFinite(l.rate) && Number.isFinite(l.qty));
     if (!valid.length) return;
     setSaving(true);
-    const { data: bill, error } = await supabase
-      .from("veg_bills")
-      .insert({
-        household_id: householdId,
-        total: billTotal(valid),
-        vendor_asked: Number.isFinite(vendor) ? vendor : null,
-        bought_on: billDate,
-        vendor: shop.trim() || null,
-      })
-      .select("id")
-      .single();
+    const row = {
+      total: billTotal(valid),
+      vendor_asked: Number.isFinite(vendor) ? vendor : null,
+      bought_on: billDate,
+      vendor: shop.trim() || null,
+    };
+    const { data: bill, error } = editing
+      ? await supabase.from("veg_bills").update(row).eq("id", editing.id).select("id").single()
+      : await supabase.from("veg_bills").insert({ ...row, household_id: householdId }).select("id").single();
     if (!error && bill) {
+      // Editing: add the new item rows first, then remove the old ones, so a failure never leaves the bill empty.
+      const { data: oldItems } = editing ? await supabase.from("veg_items").select("id").eq("bill_id", bill.id) : { data: [] };
       const { error: itemsError } = await supabase.from("veg_items").insert(
         valid.map((l) => ({
           bill_id: bill.id,
@@ -156,17 +215,22 @@ export default function VegCalculator() {
         })),
       );
       if (itemsError) console.warn(itemsError.message);
+      else if (oldItems?.length) await supabase.from("veg_items").delete().in("id", oldItems.map((i) => i.id));
     }
     setSaving(false);
     if (error) {
       setSavedMsg("Couldn't save — check your connection");
       return;
     }
-    setLines([]);
-    setVendorSaid("");
-    setSavedMsg(`Saved ${formatRupees(billTotal(valid))} for ${billDate === todayIST() ? "today" : prettyDate(billDate)}`);
-    setBillDate(todayIST());
-    window.dispatchEvent(new Event("veg-bill-saved"));
+    const when = billDate === todayIST() ? "today" : prettyDate(billDate);
+    setSavedMsg(editing ? `Updated the bill for ${when} — now ${formatRupees(billTotal(valid))}` : `Saved ${formatRupees(billTotal(valid))} for ${when}`);
+    if (editing) finishEditing();
+    else {
+      setLines([]);
+      setVendorSaid("");
+      setBillDate(todayIST());
+    }
+    window.dispatchEvent(new Event(BILL_SAVED_EVENT));
     setTimeout(() => setSavedMsg(null), 3000);
   }
 
@@ -178,7 +242,6 @@ export default function VegCalculator() {
   const vendor = num(vendorSaid);
   const diff = Number.isFinite(vendor) ? roundPaise(vendor - total) : null;
 
-  const [heard, setHeard] = useState<{ text: string; added: string[] } | null>(null);
 
   function addSpoken(text: string, result: VoiceResult) {
     const added: VegLine[] = result.veg_items.map((v) => {
@@ -394,6 +457,17 @@ export default function VegCalculator() {
       </div>
 
       <div className="flex flex-col gap-5">
+      {editing && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border-2 border-accent/40 bg-surface px-4 py-3">
+          <span className="text-sm">
+            ✏️ Editing the bill from <b>{prettyDate(editing.bought_on)}</b>. Saving replaces it.
+          </span>
+          <button onClick={cancelEditing} className="ml-auto text-sm text-ink-soft underline">
+            Cancel editing
+          </button>
+        </div>
+      )}
+
       {/* Lines */}
       {lines.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-line px-4 py-10 text-center text-ink-soft">Tap an item <span className="lg:hidden">above</span><span className="hidden lg:inline">on the left</span> to start the bill.</p>
@@ -494,10 +568,10 @@ export default function VegCalculator() {
               disabled={saving || total === 0}
               className="rounded-xl bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-50"
             >
-              {saving ? "Saving…" : "Save bill"}
+              {saving ? "Saving…" : editing ? "Save changes" : "Save bill"}
             </button>
-            <button onClick={clearBill} className="text-sm text-ink-soft underline">
-              Clear without saving
+            <button onClick={editing ? cancelEditing : clearBill} className="text-sm text-ink-soft underline">
+              {editing ? "Cancel editing" : "Clear without saving"}
             </button>
           </div>
         </div>

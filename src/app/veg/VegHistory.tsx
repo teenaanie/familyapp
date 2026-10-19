@@ -6,26 +6,11 @@ import MonthNav, { thisMonth, type YearMonth } from "@/components/MonthNav";
 import { supabase } from "@/lib/supabase";
 import { daysInMonth, dayKey, monthKey } from "@/lib/pay";
 import { todayIST } from "@/lib/reminders";
-import { formatRupees, rateLabel, UNIT_LABEL, type Unit } from "@/lib/veg";
+import { formatRupees, rateLabel, UNIT_LABEL } from "@/lib/veg";
+import { BILL_SAVED_EVENT, EDIT_BILL_EVENT, type SavedBill, type SavedBillItem } from "@/lib/vegBills";
 
-interface Item {
-  name: string;
-  qty: number;
-  qty_unit: Unit;
-  rate: number;
-  rate_qty: number;
-  rate_unit: Unit;
-  price: number;
-}
-
-interface Bill {
-  id: string;
-  bought_on: string;
-  vendor: string | null;
-  total: number;
-  vendor_asked: number | null;
-  veg_items: Item[];
-}
+type Bill = SavedBill;
+type Item = SavedBillItem;
 
 function dayHeading(iso: string) {
   const today = todayIST();
@@ -70,8 +55,8 @@ export default function VegHistory() {
 
   useEffect(reload, [reload]);
   useEffect(() => {
-    window.addEventListener("veg-bill-saved", reload);
-    return () => window.removeEventListener("veg-bill-saved", reload);
+    window.addEventListener(BILL_SAVED_EVENT, reload);
+    return () => window.removeEventListener(BILL_SAVED_EVENT, reload);
   }, [reload]);
 
   async function remove(b: Bill) {
@@ -145,9 +130,17 @@ export default function VegHistory() {
                           ))}
                         </tbody>
                       </table>
-                      <button onClick={() => remove(b)} className="mt-2 text-xs text-bad underline">
-                        Delete this bill
-                      </button>
+                      <div className="mt-3 flex items-center gap-4">
+                        <button
+                          onClick={() => window.dispatchEvent(new CustomEvent(EDIT_BILL_EVENT, { detail: b }))}
+                          className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white"
+                        >
+                          Edit this bill
+                        </button>
+                        <button onClick={() => remove(b)} className="ml-auto text-xs text-bad underline">
+                          Delete this bill
+                        </button>
+                      </div>
                     </div>
                   )}
                 </li>
