@@ -8,17 +8,20 @@ import { PRODUCE } from "./produce";
 
 const UNITS = ["kg", "g", "piece", "dozen", "bunch"] as const;
 
+const VegItem = z.object({
+  name: z.string().describe("Canonical English name from the catalogue when it matches, else the spoken name in English"),
+  rate: z.number().nullable().describe("Price the vendor quoted, in rupees; null if not said"),
+  rate_qty: z.number().describe("How much that price is for, e.g. 1 (kg), 250 (g), 3 (pieces)"),
+  rate_unit: z.enum(UNITS),
+  qty: z.number().nullable().describe("How much is being bought; null if not said"),
+  qty_unit: z.enum(UNITS),
+});
+
+/** Small schema for the vegetable page: much quicker for the model than the full one. */
+const VegOnly = z.object({ items: z.array(VegItem), unclear: z.string().nullable() });
+
 export const VoiceResult = z.object({
-  veg_items: z.array(
-    z.object({
-      name: z.string().describe("Canonical English name from the catalogue when it matches, else the spoken name in English"),
-      rate: z.number().nullable().describe("Price the vendor quoted, in rupees; null if not said"),
-      rate_qty: z.number().describe("How much that price is for, e.g. 1 (kg), 250 (g), 3 (pieces)"),
-      rate_unit: z.enum(UNITS),
-      qty: z.number().nullable().describe("How much is being bought; null if not said"),
-      qty_unit: z.enum(UNITS),
-    }),
-  ),
+  veg_items: z.array(VegItem),
   absences: z.array(
     z.object({
       staff_name: z.string(),
@@ -143,7 +146,39 @@ REMINDERS: birthdays and anniversaries repeat yearly; bills usually monthly; oth
 If nothing usable was said, return empty lists and explain briefly in unclear.`;
 }
 
+const VEG_RULES = `Extract vegetable/fruit purchases from what a shopper in Kerala said (Indian English, often with Hindi or Malayalam words; transcription may have small mistakes). Never calculate prices.
+Catalogue (name, then what people call it): ${catalogue}. Use the catalogue name when it matches.
+- "forty rupees a kilo" / "kilo forty" / "40 per kg" → rate 40, rate_qty 1, rate_unit kg.
+- "15 rupees for 250 grams" / "paav 15" → rate 15, rate_qty 250, rate_unit g.
+- "3 for 100" (pieces) → rate 100, rate_qty 3, rate_unit piece. "60 a dozen" → rate 60, rate_qty 1, rate_unit dozen.
+- Quantities: paav / pav / kaal kilo = 250 g; aadha kilo / ara kilo / half kilo = 500 g; dedh kilo = 1.5 kg; dhai kilo = 2.5 kg; "600 grams" → qty 600, qty_unit g; "point six kilo" → qty 0.6, qty_unit kg. "aaru ennam" = 6 pieces.
+- No rate said → rate null. No quantity said → qty null.`;
+
+/** Vegetable page: small prompt and schema, no names needed. ~1.4 s once warm. */
+export async function parseVeg(text: string): Promise<VoiceResult> {
+  anthropic ??= new Anthropic();
+  const res = await anthropic.messages.parse({
+    model: "claude-haiku-4-5",
+    max_tokens: 1024,
+    system: VEG_RULES,
+    messages: [{ role: "user", content: text }],
+    output_config: { format: zodOutputFormat(VegOnly) },
+  });
+  if (!res.parsed_output) throw new Error("Couldn't understand that — please try again.");
+  const { items, unclear } = res.parsed_output;
+  return { veg_items: items, absences: [], payments: [], new_payees: [], new_staff: [], reminders: [], unclear };
+}
+
+/**
+ * The first request with a given output schema is slow (~4 s) while the model prepares
+ * it; a tiny request when the vegetable page opens takes that hit in the background.
+ */
+export async function warmVeg(): Promise<void> {
+  await parseVeg("Tomato 40 a kilo, half kilo");
+}
+
 export async function parseUtterance(text: string, ctx: VoiceContext): Promise<VoiceResult> {
+  if (ctx.mode === "veg") return parseVeg(text);
   anthropic ??= new Anthropic();
   const res = await anthropic.messages.parse({
     model: "claude-haiku-4-5",

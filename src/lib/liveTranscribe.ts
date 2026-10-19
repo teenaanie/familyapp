@@ -1,4 +1,7 @@
-// Browser-only: streams microphone audio to OpenAI live transcription and reports words as they arrive.
+// Browser-only: captures the microphone and streams it to OpenAI live transcription,
+// reporting words as they arrive. Capture starts immediately; audio spoken before the
+// connection is ready is queued and sent once it opens. A WAV copy is kept so the
+// recording can still be transcribed the slow way if the live connection fails.
 
 const RATE = 24000; // what the transcription session expects (16-bit mono PCM)
 const CHUNK = RATE / 10; // send every 100 ms
@@ -15,9 +18,15 @@ class Capture extends AudioWorkletProcessor {
 registerProcessor("capture", Capture);
 `;
 
+export interface LiveResult {
+  /** Final transcript from the live connection, or null if it never worked. */
+  text: string | null;
+  /** The recording as WAV, for transcribing another way when live failed. */
+  audio: Blob;
+}
+
 export interface LiveSession {
-  /** Stop listening and return the final transcript. */
-  stop(): Promise<string>;
+  stop(): Promise<LiveResult>;
   cancel(): void;
 }
 
@@ -42,43 +51,36 @@ function resample(input: Float32Array, fromRate: number): Float32Array {
   return out;
 }
 
+function toWav(chunks: Int16Array[]): Blob {
+  const samples = chunks.reduce((n, c) => n + c.length, 0);
+  const header = new DataView(new ArrayBuffer(44));
+  const str = (o: number, s: string) => [...s].forEach((ch, i) => header.setUint8(o + i, ch.charCodeAt(0)));
+  str(0, "RIFF");
+  header.setUint32(4, 36 + samples * 2, true);
+  str(8, "WAVE");
+  str(12, "fmt ");
+  header.setUint32(16, 16, true);
+  header.setUint16(20, 1, true); // PCM
+  header.setUint16(22, 1, true); // mono
+  header.setUint32(24, RATE, true);
+  header.setUint32(28, RATE * 2, true);
+  header.setUint16(32, 2, true);
+  header.setUint16(34, 16, true);
+  str(36, "data");
+  header.setUint32(40, samples * 2, true);
+  return new Blob([header.buffer, ...chunks.map((c) => c.buffer as ArrayBuffer)], { type: "audio/wav" });
+}
+
+let workletUrl: string | null = null;
+
 export async function startLive(
   stream: MediaStream,
   ctx: AudioContext,
-  key: string,
+  key: Promise<string>,
   onText: (text: string) => void,
 ): Promise<LiveSession> {
-  const ws = new WebSocket("wss://api.openai.com/v1/realtime", ["realtime", `openai-insecure-api-key.${key}`]);
-  await new Promise<void>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("Live transcription timed out")), 6000);
-    ws.onopen = () => {
-      clearTimeout(t);
-      resolve();
-    };
-    ws.onerror = () => {
-      clearTimeout(t);
-      reject(new Error("Live transcription unavailable"));
-    };
-  });
-
-  let text = "";
-  let finish: ((t: string) => void) | null = null;
-  ws.onmessage = (e) => {
-    const ev = JSON.parse(e.data);
-    if (ev.type === "conversation.item.input_audio_transcription.delta") {
-      text += ev.delta;
-      onText(text.trim());
-    } else if (ev.type === "conversation.item.input_audio_transcription.completed") {
-      finish?.(ev.transcript?.trim() || text.trim());
-    } else if (ev.type === "error") {
-      // e.g. committing an empty buffer when nothing was said
-      finish?.(text.trim());
-    }
-  };
-
-  const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
-  await ctx.audioWorklet.addModule(url);
-  URL.revokeObjectURL(url);
+  workletUrl ??= URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+  await ctx.audioWorklet.addModule(workletUrl);
   const source = ctx.createMediaStreamSource(stream);
   const node = new AudioWorkletNode(ctx, "capture");
   const mute = ctx.createGain();
@@ -86,11 +88,56 @@ export async function startLive(
   source.connect(node);
   node.connect(mute).connect(ctx.destination); // keeps the graph pulling audio on every browser
 
+  const recorded: Int16Array[] = [];
+  const queue: string[] = []; // messages waiting for the connection
+  let ws: WebSocket | null = null;
+  let liveFailed = false;
+  let text = "";
+  // Set by stop(); called when the final transcript (or a failure) arrives.
+  const done: { finish: ((t: string | null) => void) | null } = { finish: null };
+
+  const sendOrQueue = (msg: string) => {
+    if (ws?.readyState === WebSocket.OPEN) ws.send(msg);
+    else if (!liveFailed) queue.push(msg);
+  };
+
+  // Connect in the background while the person is already speaking.
+  void (async () => {
+    try {
+      const k = await key;
+      const socket = new WebSocket("wss://api.openai.com/v1/realtime", ["realtime", `openai-insecure-api-key.${k}`]);
+      ws = socket;
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error("timeout")), 6000);
+        socket.onopen = () => (clearTimeout(t), resolve());
+        socket.onerror = () => (clearTimeout(t), reject(new Error("error")));
+      });
+      socket.onmessage = (e) => {
+        const ev = JSON.parse(e.data);
+        if (ev.type === "conversation.item.input_audio_transcription.delta") {
+          text += ev.delta;
+          onText(text.trim());
+        } else if (ev.type === "conversation.item.input_audio_transcription.completed") {
+          done.finish?.(ev.transcript?.trim() || text.trim());
+        } else if (ev.type === "error") {
+          done.finish?.(text.trim() || null);
+        }
+      };
+      socket.onclose = () => done.finish?.(text.trim() || null);
+      for (const m of queue.splice(0)) socket.send(m);
+    } catch {
+      liveFailed = true;
+      queue.length = 0;
+      done.finish?.(null);
+    }
+  })();
+
   let pending = new Float32Array(0);
   const send = (samples: Float32Array) => {
     const pcm = new Int16Array(samples.length);
     for (let i = 0; i < samples.length; i++) pcm[i] = Math.max(-1, Math.min(1, samples[i])) * 0x7fff;
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) }));
+    recorded.push(pcm);
+    sendOrQueue(JSON.stringify({ type: "input_audio_buffer.append", audio: toBase64(pcm) }));
   };
   node.port.onmessage = (e: MessageEvent<Float32Array>) => {
     const chunk = resample(e.data, ctx.sampleRate);
@@ -108,23 +155,26 @@ export async function startLive(
     node.port.onmessage = null;
     source.disconnect();
     node.disconnect();
-    if (ws.readyState <= WebSocket.OPEN) ws.close();
+    if (ws && ws.readyState <= WebSocket.OPEN) ws.close();
   };
 
   return {
     async stop() {
       node.port.onmessage = null;
       if (pending.length) send(pending);
-      const final = await new Promise<string>((resolve) => {
-        const t = setTimeout(() => resolve(text.trim()), 4000);
-        finish = (s) => {
-          clearTimeout(t);
-          resolve(s);
-        };
-        ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-      });
+      const final = liveFailed
+        ? null
+        : await new Promise<string | null>((resolve) => {
+            // If the connection is still opening, give it a moment to catch up on the queue.
+            const t = setTimeout(() => resolve(text.trim() || null), 5000);
+            done.finish = (s) => {
+              clearTimeout(t);
+              resolve(s);
+            };
+            sendOrQueue(JSON.stringify({ type: "input_audio_buffer.commit" }));
+          });
       teardown();
-      return final;
+      return { text: final, audio: toWav(recorded) };
     },
     cancel: teardown,
   };

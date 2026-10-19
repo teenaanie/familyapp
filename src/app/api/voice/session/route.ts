@@ -1,22 +1,21 @@
-import { createClient } from "@supabase/supabase-js";
 import { PRODUCE } from "@/lib/produce";
+import { authenticate } from "@/lib/serverAuth";
+
+/** How long the phone may hold a key before connecting; it fetches one in advance and refreshes it. */
+const KEY_SECONDS = 600;
 
 // Mints a short-lived OpenAI key for live transcription, so the phone can stream the
 // microphone straight to OpenAI and show words as they're spoken. The real key stays here.
 export async function POST(request: Request) {
-  const token = request.headers.get("authorization")?.replace(/^Bearer /, "");
-  if (!token) return Response.json({ error: "not signed in" }, { status: 401 });
-  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false },
-  });
-  const { data: user } = await supabase.auth.getUser(token);
-  if (!user.user) return Response.json({ error: "not signed in" }, { status: 401 });
+  const auth = await authenticate(request);
+  if (!auth) return Response.json({ error: "not signed in" }, { status: 401 });
+  const mode = new URL(request.url).searchParams.get("mode");
 
-  const [staff, payees] = await Promise.all([
-    supabase.from("staff").select("name").eq("active", true),
-    supabase.from("payees").select("name").eq("active", true),
-  ]);
+  // Staff and payee names only matter outside the vegetable page.
+  const [staff, payees] =
+    mode === "veg"
+      ? [{ data: [] as { name: string }[] }, { data: [] as { name: string }[] }]
+      : await Promise.all([auth.db.from("staff").select("name").eq("active", true), auth.db.from("payees").select("name").eq("active", true)]);
   const keywords = [
     ...new Set([
       ...PRODUCE.flatMap((p) => [p.name, ...p.aliases.slice(0, 3)]),
@@ -30,7 +29,7 @@ export async function POST(request: Request) {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      expires_after: { anchor: "created_at", seconds: 120 },
+      expires_after: { anchor: "created_at", seconds: KEY_SECONDS },
       session: {
         type: "transcription",
         audio: {

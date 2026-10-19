@@ -21,6 +21,47 @@ export async function sendToVoiceApi(body: FormData): Promise<{ text: string; re
   return json;
 }
 
+// ── Getting ready before the tap ──
+// A live-transcription key is fetched when the mic appears and kept fresh, so tapping
+// doesn't wait for our server. Keys are used once, then replaced in the background.
+const KEY_FRESH_MS = 8 * 60 * 1000; // keys last 10 minutes
+const keys = new Map<VoiceMode, { at: number; key: Promise<string> }>();
+
+function fetchKey(mode: VoiceMode) {
+  const key = authHeader()
+    .then((h) => fetch(`/api/voice/session?mode=${mode}`, { method: "POST", headers: h }))
+    .then(async (res) => {
+      const json = await res.json();
+      if (!res.ok || !json.key) throw new Error("no live key");
+      return json.key as string;
+    });
+  key.catch(() => keys.delete(mode));
+  keys.set(mode, { at: Date.now(), key });
+  return key;
+}
+
+function takeKey(mode: VoiceMode): Promise<string> {
+  const cached = keys.get(mode);
+  const key = cached && Date.now() - cached.at < KEY_FRESH_MS ? cached.key : fetchKey(mode);
+  keys.delete(mode);
+  setTimeout(() => fetchKey(mode), 0); // ready for next time
+  return key;
+}
+
+// The first vegetable request of a while is slow while the model prepares; do it early.
+function warmUp(mode: VoiceMode) {
+  if (mode !== "veg") return;
+  try {
+    const last = Number(localStorage.getItem("voice.warmed") ?? 0);
+    if (Date.now() - last < 20 * 60 * 1000) return;
+    localStorage.setItem("voice.warmed", String(Date.now()));
+  } catch {}
+  const form = new FormData();
+  form.append("mode", mode);
+  form.append("warm", "1");
+  void authHeader().then((h) => fetch("/api/voice", { method: "POST", headers: h, body: form })).catch(() => {});
+}
+
 function pickMimeType() {
   for (const t of ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg"]) {
     if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) return t;
@@ -37,11 +78,14 @@ export default function MicButton({
   label = "Tap and speak",
   hint,
   onResult,
+  autoContinue = false,
 }: {
   mode: VoiceMode;
   label?: string;
   hint?: string;
   onResult: (text: string, result: VoiceResult) => void;
+  /** Use the words straight away instead of showing them for checking first (vegetable page). */
+  autoContinue?: boolean;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [seconds, setSeconds] = useState(0);
@@ -58,6 +102,24 @@ export default function MicButton({
   const stopRef = useRef<() => void>(() => {});
 
   useEffect(() => () => cleanup(), []);
+
+  // Be ready before the first tap, and stay ready.
+  useEffect(() => {
+    void fetchKey(mode).catch(() => {});
+    warmUp(mode);
+    const refresh = setInterval(() => void fetchKey(mode).catch(() => {}), KEY_FRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const cached = keys.get(mode);
+      if (!cached || Date.now() - cached.at > KEY_FRESH_MS) void fetchKey(mode).catch(() => {});
+      warmUp(mode);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [mode]);
 
   function cleanup() {
     if (timer.current) clearInterval(timer.current);
@@ -91,10 +153,8 @@ export default function MicButton({
     }
 
     try {
-      const res = await fetch("/api/voice/session", { method: "POST", headers: await authHeader() });
-      const { key } = await res.json();
-      if (!res.ok || !key) throw new Error("no live key");
-      session.current = await startLive(stream.current, audioCtx.current, key, setLive);
+      // Starts capturing now; the connection opens in the background and catches up.
+      session.current = await startLive(stream.current, audioCtx.current, takeKey(mode), setLive);
     } catch {
       // Live captions unavailable: record now, transcribe after.
       startRecorder(stream.current);
@@ -129,10 +189,11 @@ export default function MicButton({
     if (timer.current) clearInterval(timer.current);
     setPhase("transcribing");
     if (session.current) {
-      const text = await session.current.stop();
+      const { text, audio } = await session.current.stop();
       session.current = null;
       cleanup();
-      review(text);
+      if (text) await handleWords(text);
+      else await transcribeRecording(audio); // live connection didn't work — send the recording instead
     } else if (recorder.current?.state === "recording") {
       recorder.current.stop(); // onstop transcribes
     }
@@ -148,12 +209,23 @@ export default function MicButton({
       form.append("audio", new File([blob], "speech", { type: blob.type }));
       const res = await fetch("/api/voice", { method: "POST", headers: await authHeader(), body: form });
       const json = await res.json().catch(() => ({}));
-      review(res.ok ? json.text : "");
-      if (!res.ok) setError(json.error ?? "Couldn't hear that — type it instead, or try again.");
+      if (res.ok && json.text) await handleWords(json.text);
+      else {
+        review("");
+        setError(json.error ?? "Couldn't hear that — type it instead, or try again.");
+      }
     } catch (e) {
       review("");
       setError((e as Error).message);
     }
+  }
+
+  /** Words are ready: check them first, or go straight on when autoContinue is set. */
+  async function handleWords(text: string) {
+    if (autoContinue && text.trim() && !draft.trim()) {
+      setLive(text);
+      await submitText(text);
+    } else review(text);
   }
 
   function review(text: string) {
@@ -178,7 +250,11 @@ export default function MicButton({
   }
 
   async function submit() {
-    const text = draft.trim();
+    await submitText(draft);
+  }
+
+  async function submitText(raw: string) {
+    const text = raw.trim();
     if (!text) return setError("Nothing to use yet — type or say something first.");
     setError(null);
     setPhase("working");
@@ -189,12 +265,15 @@ export default function MicButton({
       const { result } = await sendToVoiceApi(form);
       onResult(text, result);
       setDraft("");
+      setLive("");
       setPhase("idle");
     } catch (e) {
       setError((e as Error).message);
+      setDraft(text);
       setPhase("review");
     }
   }
+
 
   const busy = phase === "starting" || phase === "transcribing" || phase === "working";
   return (

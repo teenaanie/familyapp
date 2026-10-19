@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useHousehold } from "@/components/HouseholdProvider";
 import DecimalInput from "@/components/DecimalInput";
-import MicButton from "@/components/MicButton";
+import MicButton, { sendToVoiceApi } from "@/components/MicButton";
 import type { VoiceResult } from "@/lib/voice";
 import { supabase } from "@/lib/supabase";
 import { todayIST } from "@/lib/reminders";
@@ -219,6 +219,27 @@ export default function VegCalculator() {
     setHeard(null);
   }
 
+  // Correcting the words: replace what was added from them with a fresh reading.
+  const [fixing, setFixing] = useState<string | null>(null);
+  const [redoing, setRedoing] = useState(false);
+  async function redoSpoken() {
+    if (!heard || fixing === null) return;
+    setRedoing(true);
+    try {
+      const form = new FormData();
+      form.append("mode", "veg");
+      form.append("text", fixing);
+      const { result } = await sendToVoiceApi(form);
+      setLines((ls) => ls.filter((l) => !heard.added.includes(l.id)));
+      addSpoken(fixing.trim(), result);
+      setFixing(null);
+    } catch (e) {
+      setSavedMsg((e as Error).message);
+    } finally {
+      setRedoing(false);
+    }
+  }
+
   function add(p: Produce) {
     setLines((ls) => [...ls, lineFor(p, rates[p.name])]);
   }
@@ -276,19 +297,51 @@ export default function VegCalculator() {
           mode="veg"
           label="Tap and say what you're buying"
           hint={'e.g. "Tomato 40 a kilo, 600 grams. Bhindi paav 15, half kilo."'}
-          onResult={addSpoken}
+          onResult={(text, result) => {
+            setFixing(null);
+            addSpoken(text, result);
+          }}
+          autoContinue
         />
         {heard && heard.added.length > 0 && (
           <div className="mt-3 rounded-xl bg-surface p-3 text-sm">
-            <p className="text-ink-soft">
-              Heard: <span className="italic text-ink">&ldquo;{heard.text}&rdquo;</span>
-            </p>
-            <p className="mt-1 flex items-center gap-3">
-              <span className="font-medium text-good">
-                Added {heard.added.length} item{heard.added.length === 1 ? "" : "s"} — check the numbers below.
-              </span>
-              <button onClick={undoSpoken} className="ml-auto text-ink-soft underline">Undo</button>
-            </p>
+            {fixing === null ? (
+              <>
+                <p className="text-ink-soft">
+                  Heard: <span className="italic text-ink">&ldquo;{heard.text}&rdquo;</span>
+                </p>
+                <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span className="font-medium text-good">
+                    Added {heard.added.length} item{heard.added.length === 1 ? "" : "s"} — check the numbers below.
+                  </span>
+                  <span className="ml-auto flex gap-4">
+                    <button onClick={() => setFixing(heard.text)} className="text-accent underline">Fix words</button>
+                    <button onClick={undoSpoken} className="text-ink-soft underline">Undo</button>
+                  </span>
+                </p>
+              </>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <textarea
+                  value={fixing}
+                  onChange={(e) => setFixing(e.target.value)}
+                  rows={3}
+                  autoFocus
+                  aria-label="Correct what was heard"
+                  className="input w-full resize-y text-base leading-snug"
+                />
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={redoSpoken}
+                    disabled={redoing || !fixing.trim()}
+                    className="rounded-xl bg-accent px-4 py-2 font-semibold text-white disabled:opacity-50"
+                  >
+                    {redoing ? "Redoing…" : "Redo these items"}
+                  </button>
+                  <button onClick={() => setFixing(null)} className="text-ink-soft underline">Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>

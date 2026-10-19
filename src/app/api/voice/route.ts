@@ -1,41 +1,42 @@
-import { createClient } from "@supabase/supabase-js";
-import { parseUtterance, transcribe, type VoiceMode } from "@/lib/voice";
+import { parseUtterance, transcribe, warmVeg, type VoiceMode } from "@/lib/voice";
 import { todayIST } from "@/lib/reminders";
+import { authenticate } from "@/lib/serverAuth";
 
 export const maxDuration = 30;
 
 const MAX_AUDIO_BYTES = 4 * 1024 * 1024;
+const MODES: VoiceMode[] = ["veg", "staff", "payments", "reminders", "any"];
 
 // Accepts a recording (or typed text) from a signed-in user and returns what was said
 // plus the structured actions. Nothing is saved here — the app shows it for confirmation first.
 export async function POST(request: Request) {
-  const token = request.headers.get("authorization")?.replace(/^Bearer /, "");
-  if (!token) return Response.json({ error: "not signed in" }, { status: 401 });
+  const [auth, form] = await Promise.all([authenticate(request), request.formData()]);
+  if (!auth) return Response.json({ error: "not signed in" }, { status: 401 });
 
-  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false },
-  });
-  const { data: user } = await supabase.auth.getUser(token);
-  if (!user.user) return Response.json({ error: "not signed in" }, { status: 401 });
+  const requested = form.get("mode") as VoiceMode;
+  const mode: VoiceMode = MODES.includes(requested) ? requested : "any";
 
-  const form = await request.formData();
-  const requested = form.get("mode");
-  const mode: VoiceMode = requested === "veg" || requested === "staff" || requested === "payments" || requested === "reminders" ? requested : "any";
+  // Sent when the vegetable page opens, so the first real request isn't the slow one.
+  if (form.get("warm")) {
+    await warmVeg().catch((e) => console.error("warm failed", e));
+    return Response.json({ ok: true });
+  }
+
   const audio = form.get("audio");
   const typed = form.get("text");
 
-  // Names help both the transcriber and the parser; RLS limits these to the user's household.
-  const [staff, payees] = await Promise.all([
-    supabase.from("staff").select("name").eq("active", true),
-    supabase.from("payees").select("name").eq("active", true),
-  ]);
-  const ctx = {
-    mode,
-    today: todayIST(),
-    staffNames: (staff.data ?? []).map((s) => s.name),
-    payeeNames: (payees.data ?? []).map((p) => p.name),
-  };
+  // Names help with leave and payments; the vegetable page doesn't need them.
+  const names =
+    mode === "veg"
+      ? { staffNames: [] as string[], payeeNames: [] as string[] }
+      : await Promise.all([
+          auth.db.from("staff").select("name").eq("active", true),
+          auth.db.from("payees").select("name").eq("active", true),
+        ]).then(([staff, payees]) => ({
+          staffNames: (staff.data ?? []).map((s) => s.name),
+          payeeNames: (payees.data ?? []).map((p) => p.name),
+        }));
+  const ctx = { mode, today: todayIST(), ...names };
 
   try {
     let text: string;
