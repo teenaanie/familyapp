@@ -15,6 +15,9 @@ export async function GET(request: Request) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  const missing = ["SUPABASE_SECRET_KEY", "NEXT_PUBLIC_VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY"].filter((k) => !process.env[k]);
+  if (missing.length) return Response.json({ error: `Missing settings: ${missing.join(", ")}` }, { status: 500 });
+
   // Service key: reads every household's rows. Never exposed to the browser.
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SECRET_KEY!, {
     auth: { persistSession: false },
